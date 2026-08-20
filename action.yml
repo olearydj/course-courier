@@ -1,0 +1,71 @@
+name: Course Courier review
+description: Build, verify, and review a course export without modifying its public repository.
+inputs:
+  config:
+    description: Manifest path relative to the calling course repository.
+    required: true
+  public_token:
+    description: Optional read-only token for a private public repository.
+    required: false
+    default: ""
+outputs:
+  changed:
+    description: Whether the managed public tree differs from the staged export.
+    value: ${{ steps.compare.outputs.changed }}
+  inventory_path:
+    description: Runner path of the verified inventory JSON.
+    value: ${{ steps.prepare.outputs.inventory }}
+  review_path:
+    description: Runner path of the structured review JSON.
+    value: ${{ steps.prepare.outputs.review }}
+runs:
+  using: composite
+  steps:
+    - uses: astral-sh/setup-uv@v6
+    - id: prepare
+      shell: bash
+      env:
+        CONFIG: ${{ inputs.config }}
+      run: |
+        set -euo pipefail
+        review_root="${RUNNER_TEMP}/course-courier-review"
+        stage="${review_root}/stage"
+        inventory="${review_root}/inventory.json"
+        review="${review_root}/review.json"
+        mkdir -p "${review_root}"
+        uv run --locked --project "${GITHUB_ACTION_PATH}" ccc build --config "${GITHUB_WORKSPACE}/${CONFIG}" --output "${stage}" > "${inventory}"
+        uv run --locked --project "${GITHUB_ACTION_PATH}" ccc verify --config "${GITHUB_WORKSPACE}/${CONFIG}" --output "${stage}" > "${review_root}/verify.json"
+        cmp -s "${inventory}" "${review_root}/verify.json"
+        python - "${inventory}" >> "${GITHUB_OUTPUT}" <<'PY'
+        import json
+        import sys
+        inventory = json.load(open(sys.argv[1]))
+        print(f"repository={inventory['public']['repository']}")
+        print(f"branch={inventory['public']['branch']}")
+        print(f"managed_subtree={inventory['public']['managed_subtree']}")
+        PY
+        printf 'inventory=%s\nreview=%s\nstage=%s\n' "${inventory}" "${review}" "${stage}" >> "${GITHUB_OUTPUT}"
+    - uses: actions/checkout@v4
+      with:
+        repository: ${{ steps.prepare.outputs.repository }}
+        ref: ${{ steps.prepare.outputs.branch }}
+        path: .course-courier-public
+        token: ${{ inputs.public_token || github.token }}
+        persist-credentials: false
+    - id: compare
+      shell: bash
+      run: |
+        set -euo pipefail
+        uv run --locked --project "${GITHUB_ACTION_PATH}" python -m course_courier.review --stage "${{ steps.prepare.outputs.stage }}" --public "${GITHUB_WORKSPACE}/.course-courier-public" --managed-subtree "${{ steps.prepare.outputs.managed_subtree }}" > "${{ steps.prepare.outputs.review }}"
+        python - "${{ steps.prepare.outputs.review }}" >> "${GITHUB_OUTPUT}" <<'PY'
+        import json
+        import sys
+        print(f"changed={str(json.load(open(sys.argv[1]))['changed']).lower()}")
+        PY
+    - uses: actions/upload-artifact@v4
+      with:
+        name: course-courier-review
+        path: |
+          ${{ steps.prepare.outputs.inventory }}
+          ${{ steps.prepare.outputs.review }}
+        if-no-files-found: error
