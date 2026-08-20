@@ -10,7 +10,7 @@ The `publish/action.yml` composite Action accepts `config`, `public_token`, `exp
 
 The Action uses the same locked Course Courier project, `build`, `verify`, and comparison module as Sprint 4. It checks out the public repository's manifest-selected branch, captures a pre-publish review artifact, and exits without writing when the managed trees match.
 
-When differences exist, the Action mirrors the staged managed boundary into the checkout. Deletion is enabled only inside that boundary. A root-managed manifest (`managed_subtree = "."`) intentionally makes the entire public working tree, except `.git`, deletable; a maintainer must therefore review the Sprint 4 artifact and use the explicit confirmation gate before publishing it.
+When differences exist, the Action mirrors the staged managed boundary into the checkout. Deletion is enabled only inside that boundary. A root-managed manifest (`managed_subtree = "."`) intentionally makes the entire public working tree, except `.git`, deletable; it therefore requires a carefully maintained manifest, a protected calling branch, and an environment-scoped token.
 
 The Action configures a fixed bot identity, commits only if the public checkout has a diff, and pushes `HEAD` to the manifest-selected branch. The commit message includes the private GitHub commit SHA and manifest SHA. It uploads the inventory and pre-publish review JSON regardless of whether a commit was necessary.
 
