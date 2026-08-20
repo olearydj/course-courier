@@ -22,6 +22,8 @@ runs:
   using: composite
   steps:
     - uses: astral-sh/setup-uv@v6
+      with:
+        version: "0.12.5"
     - id: prepare
       shell: bash
       env:

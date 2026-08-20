@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import tomllib
 from pathlib import Path
 
 from course_courier.review import compare_trees
@@ -48,6 +49,13 @@ def test_composite_action_metadata_exposes_review_outputs() -> None:
     assert action["runs"]["using"] == "composite"
     assert {"config", "public_token"} <= action["inputs"].keys()
     assert {"changed", "inventory_path", "review_path"} <= action["outputs"].keys()
+    assert action["runs"]["steps"][0]["with"]["version"] == "0.12.5"
+
+
+def test_project_declares_its_lockfile_resolution_policy() -> None:
+    project = tomllib.loads(Path("pyproject.toml").read_text())
+
+    assert project["tool"]["uv"]["exclude-newer"] == "3 days"
 
 
 def test_publish_action_metadata_requires_all_safety_gates() -> None:
@@ -59,6 +67,7 @@ def test_publish_action_metadata_requires_all_safety_gates() -> None:
     assert action["runs"]["using"] == "composite"
     assert {"config", "public_token", "expected_manifest_sha256", "confirmation"} <= action["inputs"].keys()
     assert action["inputs"]["public_token"]["required"] is True
+    assert action["runs"]["steps"][0]["with"]["version"] == "0.12.5"
     assert 'test "${CONFIRMATION}" = "publish"' in prepare["run"]
     assert "reviewed manifest SHA-256 does not match the current manifest" in prepare["run"]
     publish = action["runs"]["steps"][3]["run"]
