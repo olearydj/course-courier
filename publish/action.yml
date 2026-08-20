@@ -33,10 +33,12 @@ runs:
       shell: bash
       env:
         CONFIG: ${{ inputs.config }}
+        PUBLIC_TOKEN: ${{ inputs.public_token }}
         EXPECTED_MANIFEST_SHA256: ${{ inputs.expected_manifest_sha256 }}
         CONFIRMATION: ${{ inputs.confirmation }}
       run: |
         set -euo pipefail
+        test -n "${PUBLIC_TOKEN}"
         test "${CONFIRMATION}" = "publish"
         publish_root="${RUNNER_TEMP}/course-courier-publish"
         stage="${publish_root}/stage"

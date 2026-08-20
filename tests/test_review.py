@@ -68,6 +68,7 @@ def test_publish_action_metadata_requires_all_safety_gates() -> None:
     assert {"config", "public_token", "expected_manifest_sha256", "confirmation"} <= action["inputs"].keys()
     assert action["inputs"]["public_token"]["required"] is True
     assert action["runs"]["steps"][0]["with"]["version"] == "0.12.5"
+    assert 'test -n "${PUBLIC_TOKEN}"' in prepare["run"]
     assert 'test "${CONFIRMATION}" = "publish"' in prepare["run"]
     assert "reviewed manifest SHA-256 does not match the current manifest" in prepare["run"]
     publish = action["runs"]["steps"][3]["run"]
