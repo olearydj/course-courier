@@ -67,10 +67,11 @@ def test_publish_action_metadata_requires_all_safety_gates() -> None:
     assert action["runs"]["using"] == "composite"
     assert {"config", "public_token", "expected_manifest_sha256", "confirmation"} <= action["inputs"].keys()
     assert action["inputs"]["public_token"]["required"] is True
+    assert action["inputs"]["expected_manifest_sha256"]["required"] is False
     assert action["runs"]["steps"][0]["with"]["version"] == "0.12.5"
     assert 'test -n "${PUBLIC_TOKEN}"' in prepare["run"]
     assert 'test "${CONFIRMATION}" = "publish"' in prepare["run"]
-    assert "reviewed manifest SHA-256 does not match the current manifest" in prepare["run"]
+    assert "if sys.argv[2] and inventory['manifest_sha256'] != sys.argv[2]:" in prepare["run"]
     publish = action["runs"]["steps"][3]["run"]
     assert "rsync -a --delete --exclude=.git" in publish
     assert "github.token" not in Path("publish/action.yml").read_text()
