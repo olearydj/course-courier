@@ -188,6 +188,13 @@ def test_rejects_a_config_symlink_redirecting_into_another_worktree(tmp_path: Pa
     with pytest.raises(CourierError, match="symbolic link redirecting"):
         init_workflow(config, sha=PIN)
 
+    if link_target == "content":
+        # Lexical normalization must not erase the link: attacker/link/../content collapses
+        # to attacker/content before the walk, while the OS follows the link first and lands
+        # in the victim's content root. `..` is therefore rejected outright.
+        with pytest.raises(CourierError, match=r"must not contain `\.\.`"):
+            init_workflow(attacker / "link" / ".." / "content" / "PUBLISH.toml", sha=PIN)
+
     assert not (victim / WORKFLOW).exists()
     assert not (attacker / WORKFLOW).exists()
     assert init_workflow(victim_manifest, sha=PIN).exists()

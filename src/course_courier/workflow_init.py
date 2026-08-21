@@ -130,7 +130,13 @@ def _reject_symlink_redirection(config_path: Path, worktree: Path) -> None:
     symlink component is acceptable only when it resolves to a strict ancestor of the detected
     work-tree root (a mount alias above the repository); a link resolving to the work tree or
     below it redirects the write and is refused.
+
+    `..` components are rejected outright: lexical normalization would collapse `link/..`
+    before the walk while the operating system follows the link first, hiding the very
+    component this check must inspect.
     """
+    if ".." in Path(config_path).parts:
+        raise CourierError(f"{config_path}: `--config` must not contain `..` components; supply the direct path")
     supplied = Path(os.path.abspath(config_path))
     walked = Path(supplied.anchor)
     for part in supplied.parts[1:]:
