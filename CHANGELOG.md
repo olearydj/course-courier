@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 - 2026-08-20
 
 - Add version-2 manifests: `PUBLISH.toml` keeps publication policy while `RELEASES.txt` selects content with identity entries, `source -> destination` renames, and recursive directory entries with line-numbered diagnostics, duplicate and overlap rejection, deterministic expansion, transient and dotfile exclusion with reported counts, and enforcement inside a Git work tree that every selected source is tracked, keeping a local plan identical to what CI publishes.
 - Add the unified Jupytext-root notebook contract: a listed notebook beneath a configured root is always staged normalized, generated from a same-stem Markdown source when one exists (with pair synchronization enforced when a private notebook also exists), and is never executable.
