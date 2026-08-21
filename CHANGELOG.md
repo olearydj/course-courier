@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Add `ccc init-workflow`, which scaffolds a course repository's publish workflow at the Git work-tree root with YAML-safe rendering, derived trigger paths and concurrency group, validated branch input, and immutable action pins resolved from the running release's annotated tag (`--sha` overrides for offline or unreleased builds). The command refuses to overwrite without `--force`, replaces atomically, and prints the remaining manual setup checklist.
+
 ## 0.2.0 - 2026-08-20
 
 - Add version-2 manifests: `PUBLISH.toml` keeps publication policy while `RELEASES.txt` selects content with identity entries, `source -> destination` renames, and recursive directory entries with line-numbered diagnostics, duplicate and overlap rejection, deterministic expansion, transient and dotfile exclusion with reported counts, and enforcement inside a Git work tree that every selected source is tracked, keeping a local plan identical to what CI publishes.

@@ -10,6 +10,8 @@ import typer
 from .planner import CourierError, create_plan
 from .staging import build as build_staging
 from .staging import verify as verify_staging
+from .workflow_init import MANUAL_CHECKLIST
+from .workflow_init import init_workflow as init_workflow_scaffold
 
 app = typer.Typer(
     add_completion=False, no_args_is_help=True, help="Safely plan allowlisted publication of course content."
@@ -50,6 +52,34 @@ def build(
         typer.echo(f"error: {error}", err=True)
         raise typer.Exit(code=2) from None
     typer.echo(inventory.to_json(), nl=False)
+
+
+@app.command(name="init-workflow")
+def init_workflow(
+    config: Annotated[
+        Path, typer.Option("--config", exists=True, dir_okay=False, readable=True, help="Manifest path.")
+    ],
+    branch: Annotated[str, typer.Option("--branch", help="Private publishing branch.")] = "main",
+    sha: Annotated[
+        str | None,
+        typer.Option("--sha", help="Immutable Course Courier commit SHA; skips remote tag resolution."),
+    ] = None,
+    force: Annotated[bool, typer.Option("--force", help="Atomically replace an existing workflow file.")] = False,
+) -> None:
+    """Write the pinned publish workflow for this course at the Git work-tree root.
+
+    Writes exactly one file, resolving this release's commit SHA from its version tag on the
+    official repository unless --sha is given. The GitHub Environment, token secret, and branch
+    protection remain manual steps, printed on success.
+    """
+    try:
+        target = init_workflow_scaffold(config, branch=branch, sha=sha, force=force)
+    except CourierError as error:
+        typer.echo(f"error: {error}", err=True)
+        raise typer.Exit(code=2) from None
+    typer.echo(f"wrote {target}")
+    for line in MANUAL_CHECKLIST:
+        typer.echo(line)
 
 
 @app.command()

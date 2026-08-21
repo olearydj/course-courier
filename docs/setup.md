@@ -76,7 +76,13 @@ Protect the publishing branch itself so that automatic publication can only foll
 
 ## 6. Add the publish workflow
 
-Create `.github/workflows/course-courier-publish.yml` in the private repository, substituting your publishing branch and a unique concurrency group:
+Scaffold `.github/workflows/course-courier-publish.yml` with the CLI, which derives the trigger paths, config path, and concurrency group from your manifest and pins both actions to verified immutable commit SHAs:
+
+```bash
+uvx --from git+https://github.com/olearydj/course-courier@v0.2.0 ccc init-workflow --config content/PUBLISH.toml --branch main
+```
+
+The command resolves its own release's commit SHA from the version tag on the official repository (pass `--sha` with a reviewed commit when offline), refuses to overwrite an existing workflow without `--force`, and finishes by printing the manual checklist covered in steps 4, 5, and 7. For reference, the generated workflow has this shape, with `<immutable-SHA>` values the command fills in:
 
 ```yaml
 name: Publish course export
@@ -100,15 +106,15 @@ jobs:
     environment: public-course-publish
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - uses: olearydj/course-courier/publish@a71315058712bc58c41b6c82e6f6e800b9f7d6cb # v0.2.0
+      - uses: actions/checkout@<immutable-SHA> # v4.2.2
+      - uses: olearydj/course-courier/publish@<immutable-SHA> # vX.Y.Z
         with:
           config: content/PUBLISH.toml
           public_token: ${{ secrets.COURSE_COURIER_PUBLIC_TOKEN }}
           confirmation: publish
 ```
 
-Pin both actions to immutable commit SHAs, as above; the comment records the human-readable version. Because `content/` contains `PUBLISH.toml` and `RELEASES.txt`, the trigger covers policy and selection changes as well as content changes.
+Both actions are pinned to immutable commit SHAs; the comment records the human-readable version. Because `content/` contains `PUBLISH.toml` and `RELEASES.txt`, the trigger covers policy and selection changes as well as content changes. To upgrade a course later, re-run `init-workflow --force` from the newer Course Courier release.
 
 ## 7. First publication
 

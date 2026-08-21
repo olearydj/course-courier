@@ -316,18 +316,18 @@ def _validate_managed_subtree(config_path: Path, value: str) -> None:
     _reject_git_component(config_path, parts, "public.managed_subtree")
 
 
-def _validate_branch(config_path: Path, value: str) -> None:
+def _validate_branch(config_path: Path | str, value: str, field: str = "public.branch") -> None:
     if value in {"@", "HEAD"} or value.startswith("-"):
-        raise CourierError(f"{config_path}: `public.branch` is not a valid Git branch name")
+        raise CourierError(f"{config_path}: `{field}` is not a valid Git branch name")
     if any(character.isspace() or ord(character) < 32 or ord(character) == 127 for character in value):
-        raise CourierError(f"{config_path}: `public.branch` is not a valid Git branch name")
+        raise CourierError(f"{config_path}: `{field}` is not a valid Git branch name")
     if any(character in "~^:?*[\\" for character in value):
-        raise CourierError(f"{config_path}: `public.branch` is not a valid Git branch name")
+        raise CourierError(f"{config_path}: `{field}` is not a valid Git branch name")
     if value.startswith("/") or value.endswith("/") or "//" in value or ".." in value or "@{" in value:
-        raise CourierError(f"{config_path}: `public.branch` is not a valid Git branch name")
+        raise CourierError(f"{config_path}: `{field}` is not a valid Git branch name")
     components = value.split("/")
     if any(component.startswith(".") or component.endswith((".", ".lock")) for component in components):
-        raise CourierError(f"{config_path}: `public.branch` is not a valid Git branch name")
+        raise CourierError(f"{config_path}: `{field}` is not a valid Git branch name")
 
 
 def _reject_git_component(config_path: Path | str, parts: tuple[str, ...], field: str) -> None:
