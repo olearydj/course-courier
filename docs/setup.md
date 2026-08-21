@@ -1,6 +1,6 @@
 # Course Courier — Course setup guide
 
-This guide takes a private course repository from nothing to automatic publication: a push to the protected course branch rebuilds, verifies, and synchronizes an explicit allowlist of student-facing material into a public GitHub repository. It reflects Course Courier v0.2.0 and the version-2 manifest format.
+This guide takes a private course repository from nothing to automatic publication: a push to the protected course branch rebuilds, verifies, and synchronizes an explicit allowlist of student-facing material into a public GitHub repository. It reflects Course Courier v0.3.0 and the version-2 manifest format.
 
 ## Prerequisites
 
@@ -57,9 +57,9 @@ The release list is the whole export: a file removed from the list is removed fr
 Commit (or at least `git add`) the content you intend to publish first; inside a Git work tree, Course Courier refuses to publish untracked sources so that a local plan resolves exactly what CI will build from a clean checkout.
 
 ```bash
-uvx --from git+https://github.com/olearydj/course-courier@v0.2.0 ccc plan --config content/PUBLISH.toml
-uvx --from git+https://github.com/olearydj/course-courier@v0.2.0 ccc build --config content/PUBLISH.toml --output /tmp/course-public
-uvx --from git+https://github.com/olearydj/course-courier@v0.2.0 ccc verify --config content/PUBLISH.toml --output /tmp/course-public
+uvx --from git+https://github.com/olearydj/course-courier@v0.3.0 ccc plan --config content/PUBLISH.toml
+uvx --from git+https://github.com/olearydj/course-courier@v0.3.0 ccc build --config content/PUBLISH.toml --output /tmp/course-public
+uvx --from git+https://github.com/olearydj/course-courier@v0.3.0 ccc verify --config content/PUBLISH.toml --output /tmp/course-public
 ```
 
 `plan` prints the resolved export as canonical JSON without writing anything; review its `exports`, `notebook_targets`, `directory_expansions`, and `source_tracking` fields until they match your intent. `build` stages the tree at a fresh output path (it never overwrites an existing one), and `verify` independently checks the staged result. Inspect the staged tree by hand before wiring up automation; it is byte-for-byte what will be published.
@@ -79,7 +79,7 @@ Protect the publishing branch itself so that automatic publication can only foll
 Scaffold `.github/workflows/course-courier-publish.yml` with the CLI, which derives the trigger paths, config path, and concurrency group from your manifest and pins both actions to verified immutable commit SHAs:
 
 ```bash
-uvx --from git+https://github.com/olearydj/course-courier@v0.2.0 ccc init-workflow --config content/PUBLISH.toml --branch main
+uvx --from git+https://github.com/olearydj/course-courier@v0.3.0 ccc init-workflow --config content/PUBLISH.toml --branch main
 ```
 
 The command resolves its own release's commit SHA from the version tag on the official repository (pass `--sha` with a reviewed commit when offline), refuses to overwrite an existing workflow without `--force`, and finishes by printing the manual checklist covered in steps 4, 5, and 7. For reference, the generated workflow has this shape, with `<immutable-SHA>` values the command fills in:

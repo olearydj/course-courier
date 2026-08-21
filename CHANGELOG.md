@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 - 2026-08-20
 
 - Add `ccc init-workflow`, which scaffolds a course repository's publish workflow at the Git work-tree root with YAML-safe rendering, derived trigger paths and concurrency group, validated branch input, and immutable action pins resolved from the running release's annotated tag (`--sha` overrides for offline or unreleased builds). The command refuses to overwrite without `--force`, replaces atomically, and prints the remaining manual setup checklist.
 
