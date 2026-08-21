@@ -65,6 +65,40 @@ class NotebookPair:
 
 
 @dataclass(frozen=True)
+class NotebookTarget:
+    """A version-2 Jupytext-root notebook staged under the unified notebook contract."""
+
+    notebook: str
+    destination: str
+    markdown: str | None
+    source_present: bool
+
+    @property
+    def generated(self) -> bool:
+        return self.markdown is not None
+
+    def as_dict(self) -> dict[str, str | bool]:
+        entry: dict[str, str | bool] = {"destination": self.destination, "generated": self.generated}
+        if self.markdown is not None:
+            entry["markdown"] = self.markdown
+        if self.source_present:
+            entry["source"] = self.notebook
+        return entry
+
+
+@dataclass(frozen=True)
+class DirectoryExpansion:
+    """The per-entry accounting of one recursive release-list directory entry."""
+
+    entry: str
+    resolved: int
+    excluded: int
+
+    def as_dict(self) -> dict[str, str | int]:
+        return {"entry": self.entry, "resolved": self.resolved, "excluded": self.excluded}
+
+
+@dataclass(frozen=True)
 class PublicationPlan:
     """The deterministic result of resolving a Course Courier manifest."""
 
@@ -73,15 +107,28 @@ class PublicationPlan:
     exports: tuple[PlannedExport, ...]
     notebook_pairs: tuple[NotebookPair, ...]
     manifest_sha256: str
+    version: int = 1
+    release_manifest: str | None = None
+    release_manifest_sha256: str | None = None
+    notebook_targets: tuple[NotebookTarget, ...] = ()
+    directory_expansions: tuple[DirectoryExpansion, ...] = ()
+    expansion_tracking: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         plan = {
-            "version": 1,
+            "version": self.version,
             "content_root": str(self.content_root),
             "public": self.public.as_dict(),
             "exports": [entry.as_dict() for entry in self.exports],
             "manifest_sha256": self.manifest_sha256,
         }
+        if self.version >= 2:
+            plan["release_manifest"] = self.release_manifest
+            plan["release_manifest_sha256"] = self.release_manifest_sha256
+            plan["notebook_targets"] = [target.as_dict() for target in self.notebook_targets]
+            if self.directory_expansions:
+                plan["directory_expansions"] = [expansion.as_dict() for expansion in self.directory_expansions]
+                plan["expansion_tracking"] = self.expansion_tracking
         return plan
 
     def to_json(self) -> str:
@@ -106,16 +153,20 @@ def create_plan(config_path: Path) -> PublicationPlan:
 
     if not isinstance(manifest, dict):
         raise CourierError(f"{config_path}: manifest must be a TOML table")
-    _reject_unknown_fields(config_path, manifest, {"version", "public", "export", "notebook"}, "manifest")
-    _require_version(config_path, manifest.get("version"))
+    version = _require_version(config_path, manifest.get("version"))
+    content_root = config_path.parent.resolve()
+    _validate_content_root(config_path, content_root)
 
+    if version == 2:
+        from .release_list import create_plan_v2
+
+        return create_plan_v2(config_path, content_root, manifest, manifest_bytes)
+
+    _reject_unknown_fields(config_path, manifest, {"version", "public", "export", "notebook"}, "manifest")
     public = _parse_public(config_path, manifest.get("public"))
     raw_exports = manifest.get("export")
     if not isinstance(raw_exports, list) or not raw_exports:
         raise CourierError(f"{config_path}: `export` must contain one or more entries")
-
-    content_root = config_path.parent.resolve()
-    _validate_content_root(config_path, content_root)
     entries = _resolve_exports(config_path, content_root, public.managed_subtree, raw_exports)
     notebook_pairs = _parse_notebook_pairs(config_path, content_root, manifest.get("notebook", []), entries)
     return PublicationPlan(
@@ -159,9 +210,10 @@ def _parse_notebook_pairs(
     return pairs
 
 
-def _require_version(config_path: Path, value: object) -> None:
-    if isinstance(value, bool) or not isinstance(value, int) or value != 1:
-        raise CourierError(f"{config_path}: `version` must be the integer 1")
+def _require_version(config_path: Path, value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value not in {1, 2}:
+        raise CourierError(f"{config_path}: `version` must be the integer 1 or 2")
+    return value
 
 
 def _parse_public(config_path: Path, value: object) -> PublicTarget:
@@ -245,7 +297,7 @@ def _require_string(config_path: Path, value: dict[str, object], key: str, label
     return field
 
 
-def _validate_relative_path(config_path: Path, value: str, field: str) -> tuple[str, ...]:
+def _validate_relative_path(config_path: Path | str, value: str, field: str) -> tuple[str, ...]:
     if "\\" in value or value.startswith("/") or value.endswith("/") or "//" in value:
         raise CourierError(f"{config_path}: `{field}` must be a safe relative POSIX path")
     parts = tuple(value.split("/"))
@@ -278,7 +330,7 @@ def _validate_branch(config_path: Path, value: str) -> None:
         raise CourierError(f"{config_path}: `public.branch` is not a valid Git branch name")
 
 
-def _reject_git_component(config_path: Path, parts: tuple[str, ...], field: str) -> None:
+def _reject_git_component(config_path: Path | str, parts: tuple[str, ...], field: str) -> None:
     if ".git" in parts:
         raise CourierError(f"{config_path}: `{field}` must not contain a `.git` path component")
 
@@ -288,14 +340,16 @@ def _validate_content_root(config_path: Path, content_root: Path) -> None:
         raise CourierError(f"{config_path}: content root is not a directory")
 
 
-def _validate_transient_path(config_path: Path, source: str, parts: tuple[str, ...], field: str) -> None:
+def _validate_transient_path(config_path: Path | str, source: str, parts: tuple[str, ...], field: str) -> None:
     if any(part in TRANSIENT_COMPONENTS or part.startswith(".~") for part in parts):
         raise CourierError(f"{config_path}: `{field}` is transient and cannot be published: `{source}`")
     if parts[-1] == ".DS_Store" or parts[-1].endswith(TRANSIENT_SUFFIXES):
         raise CourierError(f"{config_path}: `{field}` is transient and cannot be published: `{source}`")
 
 
-def _validate_source(config_path: Path, content_root: Path, source_path: Path, source: str, label: str) -> None:
+def _validate_source(
+    config_path: Path | str, content_root: Path, source_path: Path, source: str, label: str
+) -> None:
     current = content_root
     for part in PurePosixPath(source).parts:
         current = current / part
@@ -311,7 +365,7 @@ def _validate_source(config_path: Path, content_root: Path, source_path: Path, s
         raise CourierError(f"{config_path}: {label}.source escapes the content root: `{source}`") from error
 
 
-def _reject_destination_ancestors(config_path: Path, destinations: set[str]) -> None:
+def _reject_destination_ancestors(config_path: Path | str, destinations: set[str]) -> None:
     for destination in destinations:
         for ancestor in PurePosixPath(destination).parents:
             if str(ancestor) in destinations:

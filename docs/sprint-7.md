@@ -49,7 +49,7 @@ The format provides one escape hatch for the uncommon renamed export: `source ->
 
 Every source and destination, on either side of an arrow and for every file resolved from a directory entry, passes the shared Sprint 1 through 6.5 validation: safe relative POSIX paths, the transient-path policy, rejection of `.git` as any path component, and the all-platform case-insensitive final-destination collision rules.
 
-Duplicate and overlapping selections are errors, reported with their line numbers: an entry repeated verbatim, two entries resolving the same source or colliding destinations, a file entry also covered by a directory entry, and a directory entry that equals, contains, or is contained by another directory entry.
+Duplicate and overlapping selections are errors, reported with their line numbers: an entry repeated verbatim, two entries resolving the same source or colliding destinations, a file entry also covered by a directory entry, and a directory entry that equals, contains, or is contained by another directory entry. One deliberate exception: a `.md` or `.ipynb` file entry beneath a configured Jupytext root may coexist with a directory entry that contains it, because expansion always excludes those members there - the individual listing is the only way such a file publishes, so the pairing is unambiguous. This is what lets a course list its student notebooks individually while a directory entry covers the surrounding supporting material.
 
 All release-list diagnostics identify the release-list path, the line number, and the offending entry.
 

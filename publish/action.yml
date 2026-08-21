@@ -8,7 +8,10 @@ inputs:
     description: Fine-grained read/write token for the manifest-selected public repository.
     required: true
   expected_manifest_sha256:
-    description: Optional manifest SHA-256 from a reviewed Course Courier inventory.
+    description: Optional manifest SHA-256 from a reviewed Course Courier inventory. For a version-2 manifest it must be supplied together with expected_release_manifest_sha256.
+    required: false
+  expected_release_manifest_sha256:
+    description: Optional release-list SHA-256 from a reviewed Course Courier inventory. Version-2 manifests only, and only together with expected_manifest_sha256.
     required: false
   confirmation:
     description: Literal publish confirmation.
@@ -26,6 +29,9 @@ outputs:
   manifest_sha256:
     description: SHA-256 of the manifest used for this publication.
     value: ${{ steps.prepare.outputs.manifest_sha256 }}
+  release_manifest_sha256:
+    description: SHA-256 of the release list used for this publication; empty for a version-1 manifest.
+    value: ${{ steps.prepare.outputs.release_manifest_sha256 }}
 runs:
   using: composite
   steps:
@@ -38,6 +44,7 @@ runs:
         CONFIG: ${{ inputs.config }}
         PUBLIC_TOKEN: ${{ inputs.public_token }}
         EXPECTED_MANIFEST_SHA256: ${{ inputs.expected_manifest_sha256 }}
+        EXPECTED_RELEASE_MANIFEST_SHA256: ${{ inputs.expected_release_manifest_sha256 }}
         CONFIRMATION: ${{ inputs.confirmation }}
       run: bash "${GITHUB_ACTION_PATH}/prepare.sh"
     - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -54,6 +61,7 @@ runs:
         REVIEW: ${{ steps.prepare.outputs.review }}
         MANAGED_SUBTREE: ${{ steps.prepare.outputs.managed_subtree }}
         MANIFEST_SHA256: ${{ steps.prepare.outputs.manifest_sha256 }}
+        RELEASE_MANIFEST_SHA256: ${{ steps.prepare.outputs.release_manifest_sha256 }}
         BRANCH: ${{ steps.prepare.outputs.branch }}
       run: bash "${GITHUB_ACTION_PATH}/publish.sh"
     - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

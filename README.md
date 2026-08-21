@@ -2,7 +2,7 @@
 
 `course-courier` is a deliberately small course-content publisher: it carries an explicit selection of student-facing material from a private teaching repository to its public GitHub repository.
 
-Sprints 1 through 6.5 implement the planner, safe local staging, verification, optional staged-only notebook normalization, review and publish Actions, a protected-branch automatic synchronization workflow, and hardening of manifest, file-mode, and Action-script boundaries. Enabling a course workflow remains a maintainer decision.
+Sprints 1 through 6.5 implement the planner, safe local staging, verification, optional staged-only notebook normalization, review and publish Actions, a protected-branch automatic synchronization workflow, and hardening of manifest, file-mode, and Action-script boundaries. Sprint 7 adds version-2 manifests, where a plain-text `RELEASES.txt` allowlist selects content and configured Jupytext roots stage normalized student notebooks generated from Markdown sources. Enabling a course workflow remains a maintainer decision.
 
 ## Problem
 

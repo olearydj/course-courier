@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -289,6 +290,90 @@ def test_review_scripts_prepare_and_compare_against_a_public_checkout(tmp_path: 
     assert [entry["path"] for entry in review["changed_entries"]] == ["lesson.txt"]
 
 
+def test_publish_prepare_script_gates_version_2_digests_together(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    content = workspace / "content"
+    content.mkdir(parents=True)
+    (content / "lesson.txt").write_text("lesson")
+    (content / "RELEASES.txt").write_text("lesson.txt\n")
+    (content / "PUBLISH.toml").write_text(
+        "\n".join(
+            [
+                "version = 2",
+                'release_manifest = "RELEASES.txt"',
+                "",
+                "[public]",
+                'repository = "olearydj/INSY3010"',
+                'branch = "main"',
+                'managed_subtree = "course"',
+            ]
+        )
+    )
+    manifest_sha256 = hashlib.sha256((content / "PUBLISH.toml").read_bytes()).hexdigest()
+    release_sha256 = hashlib.sha256((content / "RELEASES.txt").read_bytes()).hexdigest()
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _write_executable(fake_bin / "uv", _uv_passthrough())
+
+    lone = _run_prepare_script(
+        tmp_path, workspace, "lone", {"EXPECTED_MANIFEST_SHA256": manifest_sha256}, fake_bin
+    )
+    assert lone.returncode != 0
+    assert "together or not at all" in lone.stderr
+
+    both = _run_prepare_script(
+        tmp_path,
+        workspace,
+        "both",
+        {
+            "EXPECTED_MANIFEST_SHA256": manifest_sha256,
+            "EXPECTED_RELEASE_MANIFEST_SHA256": release_sha256,
+        },
+        fake_bin,
+    )
+    assert both.returncode == 0, both.stderr
+    outputs = dict(
+        line.split("=", 1) for line in (tmp_path / "outputs-both").read_text().splitlines() if "=" in line
+    )
+    assert outputs["release_manifest_sha256"] == release_sha256
+
+    mismatch = _run_prepare_script(
+        tmp_path,
+        workspace,
+        "mismatch",
+        {
+            "EXPECTED_MANIFEST_SHA256": manifest_sha256,
+            "EXPECTED_RELEASE_MANIFEST_SHA256": "0" * 64,
+        },
+        fake_bin,
+    )
+    assert mismatch.returncode != 0
+    assert "release-list SHA-256 does not match" in mismatch.stderr
+
+
+def _run_prepare_script(
+    tmp_path: Path, workspace: Path, label: str, extra_env: dict[str, str], fake_bin: Path
+) -> subprocess.CompletedProcess[str]:
+    runner_temp = tmp_path / f"runner-{label}"
+    runner_temp.mkdir()
+    environment = {
+        **os.environ,
+        "GITHUB_ACTION_PATH": str(Path("publish").resolve()),
+        "GITHUB_WORKSPACE": str(workspace),
+        "GITHUB_OUTPUT": str(tmp_path / f"outputs-{label}"),
+        "RUNNER_TEMP": str(runner_temp),
+        "CONFIG": "content/PUBLISH.toml",
+        "PUBLIC_TOKEN": "token",
+        "CONFIRMATION": "publish",
+        "EXPECTED_MANIFEST_SHA256": "",
+        "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+        **extra_env,
+    }
+    return subprocess.run(
+        ["bash", "publish/prepare.sh"], check=False, env=environment, capture_output=True, text=True
+    )
+
+
 def _run_publish_script(
     *, workspace: Path, stage: Path, review: Path, output: Path, path: str
 ) -> subprocess.CompletedProcess[str]:
@@ -393,9 +478,16 @@ def test_publish_action_metadata_requires_all_safety_gates() -> None:
     action = yaml.safe_load(Path("publish/action.yml").read_text())
 
     assert action["runs"]["using"] == "composite"
-    assert {"config", "public_token", "expected_manifest_sha256", "confirmation"} <= action["inputs"].keys()
+    assert {
+        "config",
+        "public_token",
+        "expected_manifest_sha256",
+        "expected_release_manifest_sha256",
+        "confirmation",
+    } <= action["inputs"].keys()
     assert action["inputs"]["public_token"]["required"] is True
     assert action["inputs"]["expected_manifest_sha256"]["required"] is False
+    assert action["inputs"]["expected_release_manifest_sha256"]["required"] is False
     assert action["runs"]["steps"][0]["with"]["version"] == "0.12.5"
     assert action["runs"]["steps"][0]["uses"].startswith("astral-sh/setup-uv@c771a70e")
     assert all("${{" not in step.get("run", "") for step in action["runs"]["steps"])
@@ -403,8 +495,10 @@ def test_publish_action_metadata_requires_all_safety_gates() -> None:
     prepare = Path("publish/prepare.sh").read_text()
     assert 'test -n "${PUBLIC_TOKEN}"' in prepare
     assert 'test "${CONFIRMATION}" = "publish"' in prepare
-    assert 'inventory["manifest_sha256"] != sys.argv[2]' in prepare
+    assert 'inventory["manifest_sha256"] != expected_manifest' in prepare
+    assert "EXPECTED_RELEASE_MANIFEST_SHA256" in prepare
     publish = Path("publish/publish.sh").read_text()
     assert "rsync -a --delete --exclude=.git" in publish
     assert "status --porcelain" in publish
+    assert "release list ${RELEASE_MANIFEST_SHA256}" in publish
     assert "github.token" not in Path("publish/action.yml").read_text()

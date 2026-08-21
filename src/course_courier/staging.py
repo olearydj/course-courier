@@ -16,7 +16,7 @@ import jupytext
 import nbformat
 import yaml
 
-from .planner import CourierError, NotebookPair, PlannedExport, PublicationPlan, create_plan
+from .planner import CourierError, NotebookPair, NotebookTarget, PublicationPlan, create_plan
 
 
 @dataclass(frozen=True)
@@ -41,22 +41,40 @@ class StagedInventory:
 
 @dataclass(frozen=True)
 class StagedNotebook:
-    """The normalized staged representation of a declared notebook pair."""
+    """The normalized staged representation of a notebook pair or Jupytext-root target.
 
-    source: str
-    markdown: str
+    `generated` is None for a version-1 declared pair, whose inventory shape is unchanged;
+    version-2 Jupytext-root targets carry an explicit `generated` Boolean and omit an absent
+    Markdown source or private notebook.
+    """
+
+    source: str | None
+    markdown: str | None
     destination: str
     size_bytes: int
     sha256: str
+    generated: bool | None = None
 
-    def as_dict(self) -> dict[str, str | int]:
-        return {
-            "source": self.source,
-            "markdown": self.markdown,
+    def as_dict(self) -> dict[str, str | int | bool]:
+        if self.generated is None:
+            return {
+                "source": self.source or "",
+                "markdown": self.markdown or "",
+                "destination": self.destination,
+                "size_bytes": self.size_bytes,
+                "sha256": self.sha256,
+            }
+        entry: dict[str, str | int | bool] = {
             "destination": self.destination,
             "size_bytes": self.size_bytes,
             "sha256": self.sha256,
+            "generated": self.generated,
         }
+        if self.markdown is not None:
+            entry["markdown"] = self.markdown
+        if self.source is not None:
+            entry["source"] = self.source
+        return entry
 
 
 def build(config_path: Path, output_path: Path) -> StagedInventory:
@@ -64,7 +82,10 @@ def build(config_path: Path, output_path: Path) -> StagedInventory:
     plan = create_plan(config_path)
     output_path = _prepare_new_output_path(output_path)
     staged_notebooks = _staged_notebooks(plan)
+    staged_targets = _staged_targets(plan)
     notebook_destinations = {entry.destination: entry for entry in staged_notebooks}
+    targets_by_destination = {target.destination: target for target in plan.notebook_targets}
+    expected_files = _expected_staged_files(plan, staged_notebooks, staged_targets)
     temporary_root: Path | None = None
 
     try:
@@ -78,8 +99,12 @@ def build(config_path: Path, output_path: Path) -> StagedInventory:
                 _copy_export(source_path, destination_path, entry.size_bytes, entry.sha256, entry.executable)
             else:
                 _write_normalized_notebook(source_path, destination_path, notebook, entry.executable)
+        for staged in staged_targets:
+            destination_path = _output_path(temporary_root, staged.destination)
+            destination_path.parent.mkdir(parents=True, exist_ok=True)
+            _write_notebook_target(plan, targets_by_destination[staged.destination], staged, destination_path)
 
-        _verify_tree(plan, temporary_root, notebook_destinations)
+        _verify_tree(plan, temporary_root, expected_files)
         if os.path.lexists(output_path):
             raise CourierError(f"{output_path}: output path was created while build was running")
         temporary_root.rename(output_path)
@@ -90,8 +115,11 @@ def build(config_path: Path, output_path: Path) -> StagedInventory:
         if temporary_root is not None:
             shutil.rmtree(temporary_root, ignore_errors=True)
 
-    inventory = StagedInventory(plan=plan, output_root=output_path.resolve(), notebook_exports=tuple(staged_notebooks))
-    _verify_tree(plan, inventory.output_root, notebook_destinations)
+    inventory = StagedInventory(
+        plan=plan,
+        output_root=output_path.resolve(),
+        notebook_exports=_all_notebook_exports(staged_notebooks, staged_targets),
+    )
     return inventory
 
 
@@ -100,9 +128,19 @@ def verify(config_path: Path, output_path: Path) -> StagedInventory:
     plan = create_plan(config_path)
     output_root = _existing_output_root(output_path)
     staged_notebooks = _staged_notebooks(plan)
-    notebook_destinations = {entry.destination: entry for entry in staged_notebooks}
-    _verify_tree(plan, output_root, notebook_destinations)
-    return StagedInventory(plan=plan, output_root=output_root, notebook_exports=tuple(staged_notebooks))
+    staged_targets = _staged_targets(plan)
+    _verify_tree(plan, output_root, _expected_staged_files(plan, staged_notebooks, staged_targets))
+    return StagedInventory(
+        plan=plan,
+        output_root=output_root,
+        notebook_exports=_all_notebook_exports(staged_notebooks, staged_targets),
+    )
+
+
+def _all_notebook_exports(
+    staged_notebooks: list[StagedNotebook], staged_targets: list[StagedNotebook]
+) -> tuple[StagedNotebook, ...]:
+    return tuple(sorted(staged_notebooks + staged_targets, key=lambda entry: entry.destination))
 
 
 def _prepare_new_output_path(output_path: Path) -> Path:
@@ -148,28 +186,47 @@ def _copy_export(
         raise CourierError(f"{source_path}: source changed while the staged copy was being built")
 
 
-def _verify_tree(plan: PublicationPlan, output_root: Path, notebook_destinations: dict[str, StagedNotebook]) -> None:
-    expected_files = {entry.destination for entry in plan.exports}
-    expected_directories = _expected_directories(expected_files)
+def _expected_staged_files(
+    plan: PublicationPlan, staged_notebooks: list[StagedNotebook], staged_targets: list[StagedNotebook]
+) -> dict[str, tuple[int, str, bool]]:
+    notebook_destinations = {entry.destination: entry for entry in staged_notebooks}
+    expected: dict[str, tuple[int, str, bool]] = {}
+    for entry in plan.exports:
+        notebook = notebook_destinations.get(entry.destination)
+        if notebook is None:
+            expected[entry.destination] = (entry.size_bytes, entry.sha256, entry.executable)
+        else:
+            expected[entry.destination] = (notebook.size_bytes, notebook.sha256, entry.executable)
+    for staged in staged_targets:
+        expected[staged.destination] = (staged.size_bytes, staged.sha256, False)
+    return expected
+
+
+def _verify_tree(plan: PublicationPlan, output_root: Path, expected_files: dict[str, tuple[int, str, bool]]) -> None:
+    expected_directories = _expected_directories(set(expected_files))
     errors: list[str] = []
 
-    for entry in plan.exports:
-        staged_path = _output_path(output_root, entry.destination)
-        _reject_symbolic_link_components(output_root, staged_path, entry.destination, errors)
+    for destination in sorted(expected_files):
+        expected_size, expected_digest, expected_executable = expected_files[destination]
+        staged_path = _output_path(output_root, destination)
+        _reject_symbolic_link_components(output_root, staged_path, destination, errors)
         if staged_path.is_symlink() or not staged_path.is_file():
-            errors.append(f"missing or non-regular staged file: `{entry.destination}`")
+            errors.append(f"missing or non-regular staged file: `{destination}`")
             continue
         size_bytes, digest = _file_details(staged_path)
-        expected_size, expected_digest = _expected_details(entry, notebook_destinations)
-        if size_bytes != expected_size or digest != expected_digest or _is_executable(staged_path) != entry.executable:
-            errors.append(f"staged file does not match plan: `{entry.destination}`")
+        if (
+            size_bytes != expected_size
+            or digest != expected_digest
+            or _is_executable(staged_path) != expected_executable
+        ):
+            errors.append(f"staged file does not match plan: `{destination}`")
 
     boundary = _managed_boundary(plan, output_root)
     _reject_symbolic_link_components(output_root, boundary, plan.public.managed_subtree, errors)
     if boundary.is_symlink() or not boundary.is_dir():
         errors.append(f"managed boundary is missing or not a directory: `{plan.public.managed_subtree}`")
     else:
-        errors.extend(_unexpected_entries(output_root, boundary, expected_files, expected_directories))
+        errors.extend(_unexpected_entries(output_root, boundary, set(expected_files), expected_directories))
 
     if errors:
         raise CourierError(f"{output_root}: staged output does not match plan: {'; '.join(sorted(errors))}")
@@ -261,8 +318,10 @@ def _staged_notebooks(plan: PublicationPlan) -> list[StagedNotebook]:
 
 
 def _validate_notebook_pair(plan: PublicationPlan, pair: NotebookPair) -> None:
-    notebook_path = _source_path(plan, pair.notebook)
-    markdown_path = _source_path(plan, pair.markdown)
+    _validate_pair_paths(_source_path(plan, pair.notebook), _source_path(plan, pair.markdown), pair.markdown)
+
+
+def _validate_pair_paths(notebook_path: Path, markdown_path: Path, markdown_label: str) -> None:
     try:
         private_notebook = nbformat.read(notebook_path, as_version=4)
         markdown_notebook = jupytext.read(markdown_path)
@@ -271,7 +330,52 @@ def _validate_notebook_pair(plan: PublicationPlan, pair: NotebookPair) -> None:
     except (OSError, nbformat.ValidationError, ValueError, yaml.YAMLError) as error:
         raise CourierError(f"{notebook_path}: cannot validate notebook pair: {error}") from error
     if private_contents != markdown_contents:
-        raise CourierError(f"{notebook_path}: declared Markdown pair is out of sync: `{pair.markdown}`")
+        raise CourierError(f"{notebook_path}: declared Markdown pair is out of sync: `{markdown_label}`")
+
+
+def _staged_targets(plan: PublicationPlan) -> list[StagedNotebook]:
+    staged: list[StagedNotebook] = []
+    for target in plan.notebook_targets:
+        contents = _target_bytes(plan, target)
+        staged.append(
+            StagedNotebook(
+                source=target.notebook if target.source_present else None,
+                markdown=target.markdown,
+                destination=target.destination,
+                size_bytes=len(contents),
+                sha256=sha256(contents).hexdigest(),
+                generated=target.generated,
+            )
+        )
+    return sorted(staged, key=lambda entry: entry.destination)
+
+
+def _target_bytes(plan: PublicationPlan, target: NotebookTarget) -> bytes:
+    notebook_path = _source_path(plan, target.notebook)
+    if target.markdown is None:
+        return _normalized_notebook_bytes(notebook_path)
+    markdown_path = _source_path(plan, target.markdown)
+    if target.source_present:
+        _validate_pair_paths(notebook_path, markdown_path, target.markdown)
+    try:
+        markdown_notebook = jupytext.read(markdown_path)
+    except (OSError, nbformat.ValidationError, ValueError, yaml.YAMLError) as error:
+        raise CourierError(f"{markdown_path}: cannot convert Markdown source: {error}") from error
+    for index, cell in enumerate(markdown_notebook.cells):
+        # Jupytext assigns random cell identifiers on every read; a generated notebook must be
+        # deterministic so rebuilds and verification produce identical staged bytes.
+        cell["id"] = f"course-courier-{index}"
+    return _normalized_notebook_bytes_from_node(markdown_notebook)
+
+
+def _write_notebook_target(
+    plan: PublicationPlan, target: NotebookTarget, expected: StagedNotebook, destination_path: Path
+) -> None:
+    contents = _target_bytes(plan, target)
+    if len(contents) != expected.size_bytes or sha256(contents).hexdigest() != expected.sha256:
+        raise CourierError(f"{target.destination}: notebook source changed while the staged copy was being built")
+    destination_path.write_bytes(contents)
+    _set_normalized_mode(destination_path, False)
 
 
 def _write_normalized_notebook(
@@ -284,13 +388,6 @@ def _write_normalized_notebook(
         raise CourierError(f"{source_path}: notebook changed while the staged copy was being built")
     destination_path.write_bytes(contents)
     _set_normalized_mode(destination_path, expected_executable)
-
-
-def _expected_details(entry: PlannedExport, notebook_destinations: dict[str, StagedNotebook]) -> tuple[int, str]:
-    notebook = notebook_destinations.get(entry.destination)
-    if notebook is not None:
-        return notebook.size_bytes, notebook.sha256
-    return entry.size_bytes, entry.sha256
 
 
 def _normalized_notebook_bytes(path: Path) -> bytes:

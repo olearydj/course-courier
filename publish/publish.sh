@@ -34,6 +34,10 @@ if [ -z "$(git -C "${public_root}" status --porcelain)" ]; then
   echo "Course Courier review reported a change, but mirroring left the public checkout Git-clean." >&2
   exit 1
 fi
-git -C "${public_root}" commit -m "Publish course content from ${GITHUB_SHA} (manifest ${MANIFEST_SHA256})"
+commit_message="Publish course content from ${GITHUB_SHA} (manifest ${MANIFEST_SHA256})"
+if [ -n "${RELEASE_MANIFEST_SHA256:-}" ]; then
+  commit_message="${commit_message} (release list ${RELEASE_MANIFEST_SHA256})"
+fi
+git -C "${public_root}" commit -m "${commit_message}"
 git -C "${public_root}" push origin "HEAD:${BRANCH}"
 printf 'published=true\n' >> "${GITHUB_OUTPUT}"
