@@ -46,6 +46,7 @@ def init_workflow(
     _validate_branch(config_path, branch, "--branch")
 
     worktree = _worktree_root(config_path)
+    _reject_symlink_redirection(config_path, worktree)
     try:
         config_relative = config_path.resolve().relative_to(worktree).as_posix()
         content_relative = plan.content_root.relative_to(worktree).as_posix()
@@ -82,9 +83,15 @@ def init_workflow(
     )
 
     target = worktree / WORKFLOW_RELATIVE_PATH
+    for component in (worktree / ".github", target.parent, target):
+        if component.is_symlink():
+            raise CourierError(f"{component}: must be a real path beneath the work tree, not a symbolic link")
     if target.exists() and not force:
         raise CourierError(f"{target}: workflow already exists; pass --force to overwrite")
-    target.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as error:
+        raise CourierError(f"{target.parent}: cannot create workflow directory: {error.strerror or error}") from error
     _atomic_write(target, rendered)
     return target
 
@@ -113,6 +120,28 @@ def resolve_release_sha(version: str, *, remote: str = OFFICIAL_REMOTE) -> str:
 
 def _package_version() -> str:
     return metadata.version("course-courier")
+
+
+def _reject_symlink_redirection(config_path: Path, worktree: Path) -> None:
+    """Reject a supplied config path that reaches the work tree through a symbolic link.
+
+    Git resolves symbolic links before locating a work tree, so a path in one repository that
+    traverses a link into another resolves to the other repository and would scaffold there. A
+    symlink component is acceptable only when it resolves to a strict ancestor of the detected
+    work-tree root (a mount alias above the repository); a link resolving to the work tree or
+    below it redirects the write and is refused.
+    """
+    supplied = Path(os.path.abspath(config_path))
+    walked = Path(supplied.anchor)
+    for part in supplied.parts[1:]:
+        walked = walked / part
+        if walked.is_symlink():
+            resolved = walked.resolve()
+            if not (worktree != resolved and worktree.is_relative_to(resolved)):
+                raise CourierError(
+                    f"{config_path}: `{walked}` is a symbolic link redirecting into a Git work tree;"
+                    " supply the real manifest path"
+                )
 
 
 def _worktree_root(config_path: Path) -> Path:

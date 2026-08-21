@@ -171,6 +171,46 @@ def test_rejects_a_manifest_outside_a_work_tree_or_escaping_by_symlink(tmp_path:
     assert not (tmp_path / "course" / WORKFLOW).exists()
 
 
+@pytest.mark.parametrize("link_target", ["root", "content"])
+def test_rejects_a_config_symlink_redirecting_into_another_worktree(tmp_path: Path, link_target: str) -> None:
+    victim_manifest = make_course(tmp_path)
+    victim = tmp_path / "course"
+    attacker = tmp_path / "attacker"
+    attacker.mkdir()
+    _git(tmp_path, "init", "-q", str(attacker))
+    link = attacker / "link"
+    try:
+        link.symlink_to(victim if link_target == "root" else victim / "content")
+    except OSError:
+        pytest.skip("symlinks are unavailable on this platform")
+    config = link / "content" / "PUBLISH.toml" if link_target == "root" else link / "PUBLISH.toml"
+
+    with pytest.raises(CourierError, match="symbolic link redirecting"):
+        init_workflow(config, sha=PIN)
+
+    assert not (victim / WORKFLOW).exists()
+    assert not (attacker / WORKFLOW).exists()
+    assert init_workflow(victim_manifest, sha=PIN).exists()
+
+
+@pytest.mark.parametrize("linked", [".github", ".github/workflows"])
+def test_rejects_a_symlinked_workflow_parent(tmp_path: Path, linked: str) -> None:
+    manifest = make_course(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    link = tmp_path / "course" / Path(linked)
+    link.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        link.symlink_to(outside)
+    except OSError:
+        pytest.skip("symlinks are unavailable on this platform")
+
+    with pytest.raises(CourierError, match="not a symbolic link"):
+        init_workflow(manifest, sha=PIN)
+
+    assert list(outside.iterdir()) == []
+
+
 def test_resolver_returns_the_peeled_commit_not_the_tag_object(tmp_path: Path) -> None:
     upstream = tmp_path / "upstream"
     upstream.mkdir()
