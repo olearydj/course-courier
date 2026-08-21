@@ -72,7 +72,7 @@ def test_v2_plan_resolves_files_renames_and_directories(tmp_path: Path) -> None:
         "course/shared/unit1/b.csv",
     ]
     assert rendered["directory_expansions"] == [{"entry": "data/", "excluded": 2, "resolved": 2}]
-    assert rendered["expansion_tracking"] == "skipped"
+    assert rendered["source_tracking"] == "skipped"
     assert rendered["notebook_targets"] == []
 
 
@@ -154,6 +154,8 @@ def test_rejects_invalid_jupytext_roots(tmp_path: Path, roots: str, message: str
         ("../escape.txt", "safe relative"),
         (".git/config", ".git"),
         ("draft.tmp", "transient"),
+        ("slides.pdf -> .ipynb_checkpoints/slides.pdf", "transient"),
+        ("assets/ -> scratch.tmp/", "transient"),
     ],
 )
 def test_rejects_malformed_release_lines_with_line_numbers(tmp_path: Path, line: str, message: str) -> None:
@@ -252,11 +254,57 @@ def test_expansion_requires_tracked_members_inside_a_git_work_tree(tmp_path: Pat
     subprocess.run(["git", "-C", str(tmp_path), "add", "data/tracked.txt"], check=True)
 
     plan = create_plan(manifest)
-    assert plan.expansion_tracking == "verified"
+    assert plan.source_tracking == "verified"
 
     (data / "untracked.txt").write_text("untracked")
     with pytest.raises(CourierError, match="not tracked by Git"):
         create_plan(manifest)
+
+
+def test_directly_listed_sources_require_tracking_inside_a_git_work_tree(tmp_path: Path) -> None:
+    (tmp_path / "one.txt").write_text("one")
+    manifest = write_config(tmp_path)
+    write_releases(tmp_path, "one.txt\n")
+    subprocess.run(["git", "-C", str(tmp_path), "init", "-q"], check=True)
+
+    with pytest.raises(CourierError, match="not tracked by Git"):
+        create_plan(manifest)
+
+    subprocess.run(["git", "-C", str(tmp_path), "add", "one.txt"], check=True)
+    assert create_plan(manifest).source_tracking == "verified"
+
+
+def test_generated_notebook_requires_tracked_markdown_but_not_the_private_notebook(tmp_path: Path) -> None:
+    lectures = tmp_path / "lectures"
+    lectures.mkdir()
+    write_notebook_markdown(lectures / "lesson.md")
+    private = jupytext.read(lectures / "lesson.md")
+    nbformat.write(private, lectures / "lesson.ipynb")
+    manifest = write_config(tmp_path, notebooks='\n[notebooks]\njupytext_roots = ["lectures"]\n')
+    write_releases(tmp_path, "lectures/lesson.ipynb\n")
+    subprocess.run(["git", "-C", str(tmp_path), "init", "-q"], check=True)
+
+    with pytest.raises(CourierError, match="not tracked by Git"):
+        create_plan(manifest)
+
+    subprocess.run(["git", "-C", str(tmp_path), "add", "lectures/lesson.md"], check=True)
+    plan = create_plan(manifest)
+    assert plan.source_tracking == "verified"
+    assert plan.notebook_targets[0].source_present is True
+
+
+def test_expansion_excludes_transient_directory_components(tmp_path: Path) -> None:
+    data = tmp_path / "data"
+    (data / "draft.tmp").mkdir(parents=True)
+    (data / "kept.txt").write_text("kept")
+    (data / "draft.tmp" / "leaky.txt").write_text("leak")
+    manifest = write_config(tmp_path)
+    write_releases(tmp_path, "data/\n")
+
+    plan = create_plan(manifest)
+
+    assert [entry.source for entry in plan.exports] == ["data/kept.txt"]
+    assert plan.directory_expansions[0].excluded == 1
 
 
 def test_generated_notebook_builds_without_a_private_notebook(tmp_path: Path) -> None:

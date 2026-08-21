@@ -23,7 +23,7 @@ The intended author experience is:
 - **Same command locally and in CI.** CI calls the same builder used for a `plan` or `build` review.
 - **Course-neutral.** INSY3010, INSY7130, and comparable repositories should need only per-course configuration and an allowlist.
 
-## Proposed interface
+## Interface
 
 The implementation is a small Python CLI, with optional thin `just` aliases:
 
@@ -37,47 +37,44 @@ course-courier verify --config content/PUBLISH.toml --output /tmp/course-public
 
 The tool does not itself need GitHub credentials. The repository Action owns the final clone, diff, commit, and push.
 
-## Proposed manifest
+## Manifest
 
-The manifest is intentionally boring and explicit. It supports a file or a directory export and a public destination; it does not infer that all adjacent files in a source directory should be public.
+A version-2 course keeps a compact `content/PUBLISH.toml` for publication policy and selects content with a plain-text `RELEASES.txt` allowlist.
 
 ```toml
-version = 1
+version = 2
+release_manifest = "RELEASES.txt"
 
 [public]
 repository = "olearydj/INSY3010"
 branch = "main"
 managed_subtree = "course"
 
-[[export]]
-source = "README.md"
-destination = "README.md"
-
-[[export]]
-source = "LICENSE"
-destination = "LICENSE"
-
-[[export]]
-source = "lectures/01a-course-introduction/01a-course-introduction.pptx"
-destination = "lectures/01a-course-introduction/01a-course-introduction.pptx"
-
-[[export]]
-source = "lectures/01b-operators-and-expressions/01b-operators-and-expressions.ipynb"
-destination = "lectures/01b-operators-and-expressions/01b-operators-and-expressions.ipynb"
+[notebooks]
+jupytext_roots = ["lectures"]
 ```
 
-Sources are relative to the configured `content/` root. Directories may be allowed later, but must be opt-in and copied recursively only after filtering and validation. Initial releases should prefer individual files.
+`RELEASES.txt` is UTF-8 plain text: blank lines and `#` comment lines are ignored, every other line is an allowlisted entry relative to the content root, a trailing slash publishes a directory recursively, and `source -> destination` handles the uncommon rename.
+
+```text
+# Course-wide material
+LICENSE
+README.md
+
+# Student-facing lectures
+lectures/01a-course-introduction/01a-course-introduction.pptx
+lectures/01b-operators-and-expressions/01b-operators-and-expressions.ipynb
+```
+
+Directory entries are validated and filtered during expansion: symlinks, `.git` components, and (inside a Git work tree) untracked members are errors, while transient files and dotfiles are excluded with counts reported in the plan. `docs/sprint-7.md` documents the complete format, including the duplicate, overlap, and rename rules.
+
+Version-1 manifests, which enumerate each file as a `[[export]]` table and declare notebook pairs as `[[notebook]]` tables, remain fully supported with unchanged behaviour; `docs/sprint-1.md` and `docs/sprint-3.md` document that format. New courses should adopt version 2.
 
 ## Notebook policy
 
-When a course uses Jupytext, its Markdown is the authoring source and the paired notebook is the student artifact. Before export, the builder should:
+When a course uses Jupytext, its Markdown is the authoring source and the paired notebook is the student artifact. A listed notebook beneath a configured `jupytext_roots` directory is always staged normalized - outputs and execution counts stripped, notebook JSON validated - and is generated from its same-stem Markdown source when one exists. A private paired notebook need not be tracked or present; when it is, it must be synchronized with the Markdown before it can publish. A listed notebook outside every Jupytext root is copied byte for byte.
 
-1. Synchronize declared Markdown/notebook pairs.
-2. Fail if synchronization changes a tracked notebook unexpectedly in CI.
-3. Strip notebook outputs and execution counts in the staged copy only.
-4. Validate notebook JSON after stripping.
-
-The manifest normally exports the notebook, not private authoring notes or source Markdown. A course may explicitly publish source Markdown when that is an instructional choice.
+The release list normally names the notebook, not private authoring notes or source Markdown. A course may explicitly list source Markdown when that is an instructional choice.
 
 ## GitHub Action
 

@@ -72,6 +72,14 @@ def create_plan_v2(
     tracked: set[str] | None = None
     tracking: str | None = None
 
+    def require_tracked(context: str, relative: str) -> None:
+        nonlocal tracked, tracking
+        if tracking is None:
+            tracked = _tracked_files(content_root)
+            tracking = "verified" if tracked is not None else "skipped"
+        if tracked is not None and relative not in tracked:
+            raise CourierError(f"{context}: selected source is not tracked by Git: `{relative}`")
+
     def register_destination(context: str, final_destination: str) -> None:
         if final_destination in destinations:
             raise CourierError(
@@ -90,12 +98,8 @@ def create_plan_v2(
         context = f"{release_display}:{entry.line_number}"
         if entry.directory:
             members, excluded = _expand_directory(context, content_root, entry, notebook_roots, reserved)
-            if tracking is None:
-                tracked = _tracked_files(content_root)
-                tracking = "verified" if tracked is not None else "skipped"
             for member_source, member_destination in members:
-                if tracked is not None and member_source not in tracked:
-                    raise CourierError(f"{context}: expanded member is not tracked by Git: `{member_source}`")
+                require_tracked(context, member_source)
                 final_destination = _final_destination(public.managed_subtree, member_destination)
                 register_destination(context, final_destination)
                 exports.append(_planned_export(context, content_root, member_source, final_destination))
@@ -106,8 +110,17 @@ def create_plan_v2(
             final_destination = _final_destination(public.managed_subtree, entry.destination)
             register_destination(context, final_destination)
             if entry.source.endswith(NOTEBOOK_SUFFIX) and _under_root(entry.source, notebook_roots):
-                targets.append(_notebook_target(context, content_root, entry.source, final_destination))
+                target = _notebook_target(context, content_root, entry.source, final_destination)
+                # The Markdown source of a generated notebook, or the notebook itself when it is
+                # the authoritative source, must exist in CI's clean checkout. A private paired
+                # notebook may deliberately remain untracked; the Markdown is authoritative then.
+                if target.markdown is not None:
+                    require_tracked(context, target.markdown)
+                else:
+                    require_tracked(context, target.notebook)
+                targets.append(target)
             else:
+                require_tracked(context, entry.source)
                 exports.append(_planned_export(context, content_root, entry.source, final_destination))
 
     _reject_destination_ancestors(str(release_display), set(destinations))
@@ -122,7 +135,7 @@ def create_plan_v2(
         release_manifest_sha256=sha256(release_bytes).hexdigest(),
         notebook_targets=tuple(sorted(targets, key=lambda target: target.destination)),
         directory_expansions=tuple(sorted(expansions, key=lambda expansion: expansion.entry)),
-        expansion_tracking=tracking,
+        source_tracking=tracking,
     )
 
 
@@ -220,6 +233,7 @@ def _parse_release_lines(release_display: Path, raw: bytes) -> list[ReleaseEntry
         _reject_git_component(context, source_parts, "source")
         _reject_git_component(context, destination_parts, "destination")
         _validate_transient_path(context, source, source_parts, "source")
+        _validate_transient_path(context, destination, destination_parts, "destination")
         entries.append(
             ReleaseEntry(line_number=number, source=source, destination=destination, directory=source_directory)
         )
@@ -290,7 +304,7 @@ def _expand_directory(
                 raise CourierError(f"{context}: directory entry contains a `.git` component: `{relative}`")
             if path.is_symlink():
                 raise CourierError(f"{context}: directory entry contains a symbolic link: `{relative}`")
-            if name.startswith(".") or name in TRANSIENT_COMPONENTS:
+            if name.startswith(".") or name in TRANSIENT_COMPONENTS or name.endswith(TRANSIENT_SUFFIXES):
                 excluded += 1
                 continue
             kept.append(name)

@@ -112,7 +112,7 @@ class PublicationPlan:
     release_manifest_sha256: str | None = None
     notebook_targets: tuple[NotebookTarget, ...] = ()
     directory_expansions: tuple[DirectoryExpansion, ...] = ()
-    expansion_tracking: str | None = None
+    source_tracking: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         plan = {
@@ -126,9 +126,9 @@ class PublicationPlan:
             plan["release_manifest"] = self.release_manifest
             plan["release_manifest_sha256"] = self.release_manifest_sha256
             plan["notebook_targets"] = [target.as_dict() for target in self.notebook_targets]
+            plan["source_tracking"] = self.source_tracking
             if self.directory_expansions:
                 plan["directory_expansions"] = [expansion.as_dict() for expansion in self.directory_expansions]
-                plan["expansion_tracking"] = self.expansion_tracking
         return plan
 
     def to_json(self) -> str:
