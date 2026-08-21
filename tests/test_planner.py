@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import stat
 from hashlib import sha256
 from pathlib import Path
 
@@ -7,7 +8,7 @@ import pytest
 from typer.testing import CliRunner
 
 from course_courier.cli import app
-from course_courier.planner import CourierError, create_plan
+from course_courier.planner import CourierError, _validate_branch, create_plan
 
 
 def write_manifest(content_root: Path, exports: str, *, public: str | None = None, suffix: str = "") -> Path:
@@ -35,6 +36,7 @@ def test_create_plan_is_deterministic_and_does_not_write(tmp_path: Path) -> None
     assert [entry.destination for entry in plan.exports] == ["course/a/a.txt", "course/z/b.txt"]
     assert plan.exports[0].sha256 == sha256(b"alpha\n").hexdigest()
     assert plan.exports[0].size_bytes == len(b"alpha\n")
+    assert plan.exports[0].executable is False
     assert plan.manifest_sha256 == sha256(manifest.read_bytes()).hexdigest()
     assert plan.to_json().endswith("\n")
     assert {path.relative_to(tmp_path): path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()} == before
@@ -100,6 +102,69 @@ def test_rejects_casefold_and_ancestor_destination_collisions(tmp_path: Path) ->
         create_plan(ancestor_collision)
 
 
+@pytest.mark.parametrize(
+    "branch",
+    [
+        "@",
+        "HEAD",
+        "-topic",
+        "topic name",
+        "topic..name",
+        "topic@{name",
+        "topic?name",
+        "topic~name",
+        "topic^name",
+        "topic:name",
+        "topic*name",
+        "topic[name",
+        "/topic",
+        "topic/",
+        "topic//name",
+        ".topic",
+        "topic/.",
+        "topic./name",
+        "topic.lock",
+    ],
+)
+def test_rejects_invalid_git_branch_names(tmp_path: Path, branch: str) -> None:
+    (tmp_path / "one.txt").write_text("one")
+    manifest = write_manifest(
+        tmp_path,
+        export("one.txt", "one.txt"),
+        public=f'repository = "olearydj/INSY3010"\nbranch = "{branch}"\nmanaged_subtree = "course"',
+    )
+
+    with pytest.raises(CourierError, match="public.branch"):
+        create_plan(manifest)
+
+
+@pytest.mark.parametrize("branch", ["topic\tname", "topic\x01name", "topic\x7fname", "topic\\name"])
+def test_rejects_branch_names_with_control_or_escape_characters(tmp_path: Path, branch: str) -> None:
+    with pytest.raises(CourierError, match="public.branch"):
+        _validate_branch(tmp_path / "PUBLISH.toml", branch)
+
+
+@pytest.mark.parametrize("path", [".git/config", "nested/.git/config"])
+def test_rejects_git_administrative_destination_components(tmp_path: Path, path: str) -> None:
+    (tmp_path / "one.txt").write_text("one")
+    manifest = write_manifest(tmp_path, export("one.txt", path))
+
+    with pytest.raises(CourierError, match=".git"):
+        create_plan(manifest)
+
+
+def test_rejects_git_administrative_managed_subtree(tmp_path: Path) -> None:
+    (tmp_path / "one.txt").write_text("one")
+    manifest = write_manifest(
+        tmp_path,
+        export("one.txt", "one.txt"),
+        public='repository = "olearydj/INSY3010"\nbranch = "main"\nmanaged_subtree = "course/.git"',
+    )
+
+    with pytest.raises(CourierError, match=".git"):
+        create_plan(manifest)
+
+
 def test_managed_root_preserves_destinations_at_the_public_repository_root(tmp_path: Path) -> None:
     (tmp_path / "one.txt").write_text("one")
     manifest = write_manifest(
@@ -122,6 +187,34 @@ def test_rejects_schema_errors(tmp_path: Path) -> None:
         create_plan(manifest)
 
 
+@pytest.mark.parametrize(
+    "replacement",
+    [
+        "version = 2",
+        'branch = 3',
+        'managed_subtree = ""',
+        'managed_subtree = "../course"',
+        'repository = ["olearydj", "INSY3010"]',
+    ],
+)
+def test_rejects_unsupported_and_malformed_manifest_values(tmp_path: Path, replacement: str) -> None:
+    (tmp_path / "one.txt").write_text("one")
+    manifest = write_manifest(tmp_path, export("one.txt", "one.txt"))
+    if replacement.startswith("version"):
+        manifest.write_text(manifest.read_text().replace("version = 1", replacement))
+    else:
+        field = replacement.split(" = ", maxsplit=1)[0]
+        existing = {
+            "branch": 'branch = "main"',
+            "managed_subtree": 'managed_subtree = "course"',
+            "repository": 'repository = "olearydj/INSY3010"',
+        }[field]
+        manifest.write_text(manifest.read_text().replace(existing, replacement))
+
+    with pytest.raises(CourierError):
+        create_plan(manifest)
+
+
 def test_manifest_hash_changes_for_comment_only_edit(tmp_path: Path) -> None:
     (tmp_path / "one.txt").write_text("one")
     manifest = write_manifest(tmp_path, export("one.txt", "one.txt"))
@@ -131,6 +224,32 @@ def test_manifest_hash_changes_for_comment_only_edit(tmp_path: Path) -> None:
 
     assert original.exports == amended.exports
     assert original.manifest_sha256 != amended.manifest_sha256
+
+
+def test_source_hash_and_executable_state_change_with_the_source(tmp_path: Path) -> None:
+    source = tmp_path / "one.txt"
+    source.write_text("one")
+    manifest = write_manifest(tmp_path, export("one.txt", "one.txt"))
+    original = create_plan(manifest)
+
+    source.write_text("two")
+    source.chmod(stat.S_IRWXU)
+    amended = create_plan(manifest)
+
+    assert original.exports[0].sha256 != amended.exports[0].sha256
+    assert amended.exports[0].executable is True
+
+
+def test_notebook_pairs_do_not_add_an_undocumented_plan_key(tmp_path: Path) -> None:
+    (tmp_path / "lesson.ipynb").write_text('{"cells":[],"metadata":{},"nbformat":4,"nbformat_minor":5}')
+    (tmp_path / "lesson.md").write_text("---\njupyter:\n  jupytext:\n    formats: md:myst,ipynb\n---\n")
+    manifest = write_manifest(
+        tmp_path,
+        export("lesson.ipynb", "lesson.ipynb"),
+        suffix='\n[[notebook]]\nnotebook = "lesson.ipynb"\nmarkdown = "lesson.md"\n',
+    )
+
+    assert "notebooks" not in create_plan(manifest).as_dict()
 
 
 def test_cli_writes_only_json_on_success_and_no_stdout_on_failure(tmp_path: Path) -> None:

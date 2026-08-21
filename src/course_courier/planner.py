@@ -41,13 +41,15 @@ class PlannedExport:
     destination: str
     size_bytes: int
     sha256: str
+    executable: bool
 
-    def as_dict(self) -> dict[str, str | int]:
+    def as_dict(self) -> dict[str, str | int | bool]:
         return {
             "source": self.source,
             "destination": self.destination,
             "size_bytes": self.size_bytes,
             "sha256": self.sha256,
+            "executable": self.executable,
         }
 
 
@@ -80,8 +82,6 @@ class PublicationPlan:
             "exports": [entry.as_dict() for entry in self.exports],
             "manifest_sha256": self.manifest_sha256,
         }
-        if self.notebook_pairs:
-            plan["notebooks"] = [pair.as_dict() for pair in self.notebook_pairs]
         return plan
 
     def to_json(self) -> str:
@@ -151,7 +151,7 @@ def _parse_notebook_pairs(
             raise CourierError(f"{config_path}: {label}.notebook is not an exported source: `{notebook}`")
         if notebook in notebooks or markdown in markdown_sources:
             raise CourierError(f"{config_path}: {label} duplicates a declared notebook or Markdown source")
-        _validate_transient_path(config_path, markdown, markdown_parts, label)
+        _validate_transient_path(config_path, markdown, markdown_parts, f"{label}.markdown")
         _validate_source(config_path, content_root, content_root.joinpath(*markdown_parts), markdown, label)
         notebooks.add(notebook)
         markdown_sources.add(markdown)
@@ -174,6 +174,7 @@ def _parse_public(config_path: Path, value: object) -> PublicTarget:
     repository_parts = repository.split("/")
     if len(repository_parts) != 2 or not all(repository_parts):
         raise CourierError(f"{config_path}: `public.repository` must be an `owner/repository` identifier")
+    _validate_branch(config_path, branch)
     _validate_managed_subtree(config_path, managed_subtree)
     return PublicTarget(repository=repository, branch=branch, managed_subtree=managed_subtree)
 
@@ -194,8 +195,9 @@ def _resolve_exports(
         source = _require_string(config_path, raw_entry, "source", label)
         destination = _require_string(config_path, raw_entry, "destination", label)
         source_parts = _validate_relative_path(config_path, source, f"{label}.source")
-        _validate_relative_path(config_path, destination, f"{label}.destination")
-        _validate_transient_path(config_path, source, source_parts, label)
+        destination_parts = _validate_relative_path(config_path, destination, f"{label}.destination")
+        _reject_git_component(config_path, destination_parts, f"{label}.destination")
+        _validate_transient_path(config_path, source, source_parts, f"{label}.source")
 
         if source in sources:
             raise CourierError(f"{config_path}: {label}.source duplicates `{source}`")
@@ -203,7 +205,9 @@ def _resolve_exports(
 
         final_destination = destination if managed_subtree == "." else f"{managed_subtree}/{destination}"
         if final_destination in destinations:
-            raise CourierError(f"{config_path}: {label}.destination duplicates `{destination}`")
+            raise CourierError(
+                f"{config_path}: {label}.destination duplicates resolved destination `{final_destination}`"
+            )
         folded_destination = final_destination.casefold()
         if folded_destination in folded_destinations:
             other = folded_destinations[folded_destination]
@@ -219,6 +223,7 @@ def _resolve_exports(
                 destination=final_destination,
                 size_bytes=source_path.stat().st_size,
                 sha256=_sha256_file(source_path),
+                executable=_is_executable(source_path),
             )
         )
 
@@ -255,7 +260,27 @@ def _validate_relative_path(config_path: Path, value: str, field: str) -> tuple[
 def _validate_managed_subtree(config_path: Path, value: str) -> None:
     if value == ".":
         return
-    _validate_relative_path(config_path, value, "public.managed_subtree")
+    parts = _validate_relative_path(config_path, value, "public.managed_subtree")
+    _reject_git_component(config_path, parts, "public.managed_subtree")
+
+
+def _validate_branch(config_path: Path, value: str) -> None:
+    if value in {"@", "HEAD"} or value.startswith("-"):
+        raise CourierError(f"{config_path}: `public.branch` is not a valid Git branch name")
+    if any(character.isspace() or ord(character) < 32 or ord(character) == 127 for character in value):
+        raise CourierError(f"{config_path}: `public.branch` is not a valid Git branch name")
+    if any(character in "~^:?*[\\" for character in value):
+        raise CourierError(f"{config_path}: `public.branch` is not a valid Git branch name")
+    if value.startswith("/") or value.endswith("/") or "//" in value or ".." in value or "@{" in value:
+        raise CourierError(f"{config_path}: `public.branch` is not a valid Git branch name")
+    components = value.split("/")
+    if any(component.startswith(".") or component.endswith((".", ".lock")) for component in components):
+        raise CourierError(f"{config_path}: `public.branch` is not a valid Git branch name")
+
+
+def _reject_git_component(config_path: Path, parts: tuple[str, ...], field: str) -> None:
+    if ".git" in parts:
+        raise CourierError(f"{config_path}: `{field}` must not contain a `.git` path component")
 
 
 def _validate_content_root(config_path: Path, content_root: Path) -> None:
@@ -263,11 +288,11 @@ def _validate_content_root(config_path: Path, content_root: Path) -> None:
         raise CourierError(f"{config_path}: content root is not a directory")
 
 
-def _validate_transient_path(config_path: Path, source: str, parts: tuple[str, ...], label: str) -> None:
+def _validate_transient_path(config_path: Path, source: str, parts: tuple[str, ...], field: str) -> None:
     if any(part in TRANSIENT_COMPONENTS or part.startswith(".~") for part in parts):
-        raise CourierError(f"{config_path}: {label}.source is transient and cannot be published: `{source}`")
+        raise CourierError(f"{config_path}: `{field}` is transient and cannot be published: `{source}`")
     if parts[-1] == ".DS_Store" or parts[-1].endswith(TRANSIENT_SUFFIXES):
-        raise CourierError(f"{config_path}: {label}.source is transient and cannot be published: `{source}`")
+        raise CourierError(f"{config_path}: `{field}` is transient and cannot be published: `{source}`")
 
 
 def _validate_source(config_path: Path, content_root: Path, source_path: Path, source: str, label: str) -> None:
@@ -299,3 +324,7 @@ def _sha256_file(path: Path) -> str:
         for block in iter(lambda: source.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def _is_executable(path: Path) -> bool:
+    return bool(path.stat().st_mode & 0o111)

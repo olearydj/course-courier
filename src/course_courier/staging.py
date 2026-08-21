@@ -14,6 +14,7 @@ from typing import Any
 
 import jupytext
 import nbformat
+import yaml
 
 from .planner import CourierError, NotebookPair, PlannedExport, PublicationPlan, create_plan
 
@@ -74,10 +75,11 @@ def build(config_path: Path, output_path: Path) -> StagedInventory:
             destination_path.parent.mkdir(parents=True, exist_ok=True)
             notebook = notebook_destinations.get(entry.destination)
             if notebook is None:
-                _copy_export(source_path, destination_path, entry.size_bytes, entry.sha256)
+                _copy_export(source_path, destination_path, entry.size_bytes, entry.sha256, entry.executable)
             else:
-                _write_normalized_notebook(source_path, destination_path, notebook)
+                _write_normalized_notebook(source_path, destination_path, notebook, entry.executable)
 
+        _verify_tree(plan, temporary_root, notebook_destinations)
         if os.path.lexists(output_path):
             raise CourierError(f"{output_path}: output path was created while build was running")
         temporary_root.rename(output_path)
@@ -132,13 +134,15 @@ def _output_path(output_root: Path, destination: str) -> Path:
     return path
 
 
-def _copy_export(source_path: Path, destination_path: Path, expected_size: int, expected_sha256: str) -> None:
+def _copy_export(
+    source_path: Path, destination_path: Path, expected_size: int, expected_sha256: str, expected_executable: bool
+) -> None:
     if source_path.is_symlink() or not source_path.is_file():
         raise CourierError(f"{source_path}: planned source is no longer a regular file")
+    if _is_executable(source_path) != expected_executable:
+        raise CourierError(f"{source_path}: source mode changed while the staged copy was being built")
     shutil.copyfile(source_path, destination_path)
-    source_mode = source_path.stat().st_mode
-    destination_mode = destination_path.stat().st_mode
-    destination_path.chmod((destination_mode & ~0o111) | (source_mode & 0o111))
+    _set_normalized_mode(destination_path, expected_executable)
     actual_size, actual_sha256 = _file_details(destination_path)
     if actual_size != expected_size or actual_sha256 != expected_sha256:
         raise CourierError(f"{source_path}: source changed while the staged copy was being built")
@@ -157,7 +161,7 @@ def _verify_tree(plan: PublicationPlan, output_root: Path, notebook_destinations
             continue
         size_bytes, digest = _file_details(staged_path)
         expected_size, expected_digest = _expected_details(entry, notebook_destinations)
-        if size_bytes != expected_size or digest != expected_digest:
+        if size_bytes != expected_size or digest != expected_digest or _is_executable(staged_path) != entry.executable:
             errors.append(f"staged file does not match plan: `{entry.destination}`")
 
     boundary = _managed_boundary(plan, output_root)
@@ -229,6 +233,14 @@ def _file_details(path: Path) -> tuple[int, str]:
     return path.stat().st_size, digest.hexdigest()
 
 
+def _is_executable(path: Path) -> bool:
+    return bool(path.stat().st_mode & 0o111)
+
+
+def _set_normalized_mode(path: Path, executable: bool) -> None:
+    path.chmod(0o755 if executable else 0o644)
+
+
 def _staged_notebooks(plan: PublicationPlan) -> list[StagedNotebook]:
     export_destinations = {entry.source: entry.destination for entry in plan.exports}
     staged: list[StagedNotebook] = []
@@ -256,20 +268,22 @@ def _validate_notebook_pair(plan: PublicationPlan, pair: NotebookPair) -> None:
         markdown_notebook = jupytext.read(markdown_path)
         private_contents = _pair_comparison_bytes(private_notebook)
         markdown_contents = _pair_comparison_bytes(markdown_notebook)
-    except (OSError, nbformat.ValidationError, ValueError) as error:
+    except (OSError, nbformat.ValidationError, ValueError, yaml.YAMLError) as error:
         raise CourierError(f"{notebook_path}: cannot validate notebook pair: {error}") from error
     if private_contents != markdown_contents:
         raise CourierError(f"{notebook_path}: declared Markdown pair is out of sync: `{pair.markdown}`")
 
 
-def _write_normalized_notebook(source_path: Path, destination_path: Path, expected: StagedNotebook) -> None:
+def _write_normalized_notebook(
+    source_path: Path, destination_path: Path, expected: StagedNotebook, expected_executable: bool
+) -> None:
+    if _is_executable(source_path) != expected_executable:
+        raise CourierError(f"{source_path}: source mode changed while the staged copy was being built")
     contents = _normalized_notebook_bytes(source_path)
     if len(contents) != expected.size_bytes or sha256(contents).hexdigest() != expected.sha256:
         raise CourierError(f"{source_path}: notebook changed while the staged copy was being built")
     destination_path.write_bytes(contents)
-    source_mode = source_path.stat().st_mode
-    destination_mode = destination_path.stat().st_mode
-    destination_path.chmod((destination_mode & ~0o111) | (source_mode & 0o111))
+    _set_normalized_mode(destination_path, expected_executable)
 
 
 def _expected_details(entry: PlannedExport, notebook_destinations: dict[str, StagedNotebook]) -> tuple[int, str]:
@@ -314,7 +328,10 @@ def _pair_comparison_bytes(notebook: Any) -> bytes:
         raise CourierError(f"invalid notebook: {error}") from error
     for cell in normalized.cells:
         cell.pop("id", None)
+    normalized.pop("nbformat_minor", None)
     jupytext_metadata = normalized.metadata.get("jupytext")
-    if jupytext_metadata:
+    if jupytext_metadata is not None:
         jupytext_metadata.pop("text_representation", None)
+        if not jupytext_metadata:
+            normalized.metadata.pop("jupytext", None)
     return json.dumps(normalized, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")

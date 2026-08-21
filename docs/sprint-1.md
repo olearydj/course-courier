@@ -71,7 +71,7 @@ Unknown top-level fields and unknown fields within known tables are errors.
 | Field | Required | Rules |
 | --- | --- | --- |
 | `repository` | yes | Non-empty GitHub `owner/repository` identifier; exactly one `/`; neither segment is empty. |
-| `branch` | yes | Non-empty branch name. Git ref validation is deferred to the Action sprint. |
+| `branch` | yes | A valid Git branch name. It cannot use Git's reserved or forbidden ref syntax. |
 | `managed_subtree` | yes | A safe relative directory path without `..` segments, or exactly `.` to manage the entire public repository. |
 
 ### `[[export]]` fields
@@ -81,7 +81,7 @@ Unknown top-level fields and unknown fields within known tables are errors.
 | `source` | yes | A safe relative path to one regular file under the content root. |
 | `destination` | yes | A safe relative path below `managed_subtree`; it denotes a file, not a directory. |
 
-Every source and destination is interpreted with POSIX-style `/` separators, even when Course Courier runs on another platform. Empty values, absolute paths, `.` paths, `..` segments, repeated separators, backslashes, and trailing slashes are invalid. A path segment must not be empty.
+Every source and destination is interpreted with POSIX-style `/` separators, even when Course Courier runs on another platform. Empty values, absolute paths, `.` paths, `..` segments, repeated separators, backslashes, trailing slashes, and `.git` path components are invalid. A path segment must not be empty.
 
 `public.managed_subtree` alone may be `.`. This declares that Course Courier owns the public repository root and that a future mirror may delete any public-repository file not named in the manifest. It must be chosen only when the public repository has no independently maintained files such as a `CNAME` or `.github/` workflow.
 
@@ -100,7 +100,7 @@ Validation happens before any plan is emitted. A manifest is invalid if any of t
 7. Two entries resolve to the same destination.
 8. One destination is an ancestor of another destination. Although files cannot be directory ancestors in a final tree, rejecting this early makes future directory-export behaviour unambiguous.
 
-The implementation must use path-aware operations, never string-prefix tests, to establish containment. On case-insensitive filesystems it must also reject destinations that collide when compared case-insensitively. Sources retain the filesystem's native case semantics.
+The implementation must use path-aware operations, never string-prefix tests, to establish containment. It rejects destinations that collide when compared case-insensitively on every platform, ensuring a manifest is portable between maintainer filesystems. Sources retain the filesystem's native case semantics.
 
 Sprint 1 does not follow symbolic links. This is intentionally stricter than the eventual policy proposed in the README and prevents uncertainty about what would be published. Supporting internal links, if needed, is a future explicit feature with dedicated tests.
 
@@ -124,14 +124,15 @@ The default output is canonical JSON, encoded as UTF-8 and terminated by a singl
       "source": "lectures/01a-course-introduction/01a-course-introduction.pptx",
       "destination": "course/lectures/01a-course-introduction/01a-course-introduction.pptx",
       "size_bytes": 12345,
-      "sha256": "lowercase-hex-digest"
+      "sha256": "lowercase-hex-digest",
+      "executable": false
     }
   ],
   "manifest_sha256": "lowercase-hex-digest"
 }
 ```
 
-`exports` is sorted lexicographically by final destination using Unicode code point ordering. `destination` includes `managed_subtree`; this makes the future mirror target explicit. `source` remains relative to the content root. File digests are SHA-256 hashes of source bytes. `manifest_sha256` is the SHA-256 hash of the raw manifest bytes, not a re-serialized TOML value.
+`exports` is sorted lexicographically by final destination using Unicode code point ordering. `destination` includes `managed_subtree`; this makes the future mirror target explicit. `source` remains relative to the content root. File digests are SHA-256 hashes of source bytes. `executable` is true when any source execute permission bit is set. `manifest_sha256` is the SHA-256 hash of the raw manifest bytes, not a re-serialized TOML value.
 
 Canonical JSON uses sorted object keys, compact separators, and no formatting indentation. A later `--format text` option may present the same information for people, but is not in Sprint 1.
 

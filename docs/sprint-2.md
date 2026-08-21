@@ -14,7 +14,7 @@ Included:
 
 - Clean staging of every file in a validated plan.
 - An explicit, safe output-directory contract.
-- Preservation of file bytes and executable mode bits where present.
+- Preservation of file bytes and Git-compatible executable state.
 - Independent verification of a staged tree against a newly resolved plan.
 - Deterministic inventories suitable for local review and CI artifacts.
 - Fixture-based tests for successful staging, tampering, unexpected files, and unsafe output targets.
@@ -31,7 +31,7 @@ Excluded:
 - **Plan**: the validated `PublicationPlan` produced by Sprint 1.
 - **Staging root**: the local directory that receives the public-tree layout from `build`.
 - **Managed boundary**: the directory within a future public repository that Course Courier owns. It is `public.managed_subtree`, or the repository root when the value is `.`.
-- **Inventory**: canonical JSON describing a resolved plan or staged tree, including paths, sizes, and SHA-256 hashes.
+- **Inventory**: canonical JSON describing a resolved plan or staged tree, including paths, sizes, SHA-256 hashes, and executable state.
 
 ## CLI
 
@@ -52,8 +52,8 @@ After a successful plan, the builder must:
 
 1. Create a sibling temporary directory of the requested output path.
 2. Copy each planned source to its plan destination below that temporary directory. When `managed_subtree = "."`, destinations are directly below the staging root; otherwise they begin with the configured managed subtree.
-3. Copy source bytes without content transformation. Preserve the source file's executable mode bits; preserving other metadata is not required.
-4. Verify each copied file's SHA-256 hash and size against the plan before making the staged tree visible.
+3. Copy source bytes without content transformation. Set the staged mode to `0o755` when any source execute bit is set, otherwise `0o644`; preserving other metadata is not required.
+4. Verify each copied file's SHA-256 hash, size, and executable state against the plan before making the staged tree visible.
 5. Atomically rename the completed temporary directory to the requested output path.
 6. Write the canonical staged inventory to standard output, terminated by one newline.
 
@@ -71,6 +71,7 @@ On success, `build` and `verify` emit identical canonical JSON. It uses the Spri
   "exports": [
     {
       "destination": "lectures/01a-course-intro/01a-course-intro.pptx",
+      "executable": false,
       "sha256": "lowercase-hex-digest",
       "size_bytes": 12345,
       "source": "lectures/01a-course-intro/01a-course-intro.pptx"
@@ -96,7 +97,7 @@ Object keys are sorted, separators are compact, output is UTF-8, and output ends
 Verification succeeds only when all of the following are true:
 
 1. Every plan destination exists below the output root as a regular, non-symbolic-link file.
-2. Each staged file has the exact plan size and SHA-256 digest.
+2. Each staged file has the exact plan size, SHA-256 digest, and executable state.
 3. No file, directory, or symbolic link exists under the managed boundary unless it is an ancestor of a planned destination or is itself a planned file.
 4. No planned destination resolves outside the output root.
 5. The output root contains no unexpected entries when `managed_subtree = "."`.

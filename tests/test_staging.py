@@ -47,7 +47,8 @@ def test_build_and_verify_create_a_precise_staged_tree(tmp_path: Path) -> None:
     staged = output / "course" / "unit" / "run.sh"
 
     assert staged.read_bytes() == source.read_bytes()
-    assert staged.stat().st_mode & stat.S_IXUSR
+    assert stat.S_IMODE(staged.stat().st_mode) == 0o755
+    assert json.loads(inventory.to_json())["exports"][0]["executable"] is True
     assert inventory.output_root == output.resolve()
     assert verify(manifest, output).to_json() == inventory.to_json()
     assert json.loads(inventory.to_json())["output_root"] == str(output.resolve())
@@ -88,9 +89,28 @@ def test_build_failure_leaves_no_requested_output(tmp_path: Path, monkeypatch: p
 
     assert not output.exists()
     assert not list(tmp_path.glob(".staged.*"))
+    assert (tmp_path / "one.txt").read_text() == "one"
 
 
-@pytest.mark.parametrize("tamper", ["missing", "contents", "directory", "symlink"])
+def test_build_verifies_before_renaming_the_output(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    source = tmp_path / "one.txt"
+    source.write_text("one")
+    manifest = write_manifest(tmp_path, export("one.txt", "one.txt"))
+    output = tmp_path / "staged"
+
+    def fail_verify(*args: object) -> None:
+        raise CourierError("verification failed")
+
+    monkeypatch.setattr("course_courier.staging._verify_tree", fail_verify)
+
+    with pytest.raises(CourierError, match="verification failed"):
+        build(manifest, output)
+
+    assert not output.exists()
+    assert source.read_text() == "one"
+
+
+@pytest.mark.parametrize("tamper", ["missing", "contents", "directory", "symlink", "executable"])
 def test_verify_rejects_tampered_staged_files(tmp_path: Path, tamper: str) -> None:
     (tmp_path / "one.txt").write_text("one")
     manifest = write_manifest(tmp_path, export("one.txt", "one.txt"))
@@ -104,6 +124,8 @@ def test_verify_rejects_tampered_staged_files(tmp_path: Path, tamper: str) -> No
     elif tamper == "directory":
         staged.unlink()
         staged.mkdir()
+    elif tamper == "executable":
+        staged.chmod(0o755)
     else:
         staged.unlink()
         try:
@@ -113,6 +135,20 @@ def test_verify_rejects_tampered_staged_files(tmp_path: Path, tamper: str) -> No
 
     with pytest.raises(CourierError, match="does not match plan"):
         verify(manifest, output)
+
+
+def test_staging_normalizes_any_source_execute_bit_to_git_mode(tmp_path: Path) -> None:
+    source = tmp_path / "owner-only.sh"
+    source.write_text("#!/bin/sh\nexit 0\n")
+    source.chmod(0o700)
+    manifest = write_manifest(tmp_path, export("owner-only.sh", "owner-only.sh"))
+    output = tmp_path / "staged"
+
+    build(manifest, output)
+
+    staged = output / "course" / "owner-only.sh"
+    assert stat.S_IMODE(staged.stat().st_mode) == 0o755
+    assert verify(manifest, output)
 
 
 def test_verify_rejects_unexpected_file_and_directory_inside_boundary(tmp_path: Path) -> None:

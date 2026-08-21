@@ -14,9 +14,9 @@ The Action outputs `changed`, `inventory_path`, and `review_path`. It uploads bo
 
 ## Comparison contract
 
-The comparison is read-only and deterministic. It compares the staged managed boundary to the corresponding public boundary, excluding only the public checkout's root `.git` directory. For `managed_subtree = "."`, the complete public working tree is compared. For a non-root subtree, files outside that subtree are not inspected.
+The comparison is read-only and deterministic. It compares the Git-representable entries of the staged managed boundary and the corresponding public boundary: regular files and symbolic links. `.git` entries are excluded at any depth on both sides, matching the publisher's rsync exclusion; a nested public `.git` directory is neither compared nor removed by publication and requires manual cleanup. Bare directories are not compared, because Git cannot represent an empty directory: a directory-only difference could never produce a publishable change, and reporting one would wedge the publisher's consistency check. For `managed_subtree = "."`, the complete public working tree apart from `.git` entries is compared. For a non-root subtree, files outside that subtree are not inspected.
 
-The review JSON has a Boolean `changed` value and destination-sorted `added`, `removed`, and `changed_entries` arrays. Each item identifies its relative path and filesystem type; files also report SHA-256 and size. A missing public managed subtree is treated as an empty public tree, producing additions rather than an error.
+The review JSON has a Boolean `changed` value and destination-sorted `added`, `removed`, and `changed_entries` arrays. Each item identifies its relative path and its kind, file or symlink; regular files also report SHA-256, size, and an `executable` Boolean. A missing public managed subtree is treated as an empty public tree, producing additions rather than an error.
 
 ## Calling workflow
 

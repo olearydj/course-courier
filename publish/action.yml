@@ -29,7 +29,7 @@ outputs:
 runs:
   using: composite
   steps:
-    - uses: astral-sh/setup-uv@v6
+    - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
       with:
         version: "0.12.5"
     - id: prepare
@@ -39,31 +39,8 @@ runs:
         PUBLIC_TOKEN: ${{ inputs.public_token }}
         EXPECTED_MANIFEST_SHA256: ${{ inputs.expected_manifest_sha256 }}
         CONFIRMATION: ${{ inputs.confirmation }}
-      run: |
-        set -euo pipefail
-        test -n "${PUBLIC_TOKEN}"
-        test "${CONFIRMATION}" = "publish"
-        publish_root="${RUNNER_TEMP}/course-courier-publish"
-        stage="${publish_root}/stage"
-        inventory="${publish_root}/inventory.json"
-        review="${publish_root}/review.json"
-        mkdir -p "${publish_root}"
-        uv run --locked --project "${GITHUB_ACTION_PATH}/.." ccc build --config "${GITHUB_WORKSPACE}/${CONFIG}" --output "${stage}" > "${inventory}"
-        uv run --locked --project "${GITHUB_ACTION_PATH}/.." ccc verify --config "${GITHUB_WORKSPACE}/${CONFIG}" --output "${stage}" > "${publish_root}/verify.json"
-        cmp -s "${inventory}" "${publish_root}/verify.json"
-        python - "${inventory}" "${EXPECTED_MANIFEST_SHA256}" >> "${GITHUB_OUTPUT}" <<'PY'
-        import json
-        import sys
-        inventory = json.load(open(sys.argv[1]))
-        if sys.argv[2] and inventory['manifest_sha256'] != sys.argv[2]:
-            raise SystemExit('reviewed manifest SHA-256 does not match the current manifest')
-        print(f"repository={inventory['public']['repository']}")
-        print(f"branch={inventory['public']['branch']}")
-        print(f"managed_subtree={inventory['public']['managed_subtree']}")
-        print(f"manifest_sha256={inventory['manifest_sha256']}")
-        PY
-        printf 'inventory=%s\nreview=%s\nstage=%s\n' "${inventory}" "${review}" "${stage}" >> "${GITHUB_OUTPUT}"
-    - uses: actions/checkout@v4
+      run: bash "${GITHUB_ACTION_PATH}/prepare.sh"
+    - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       with:
         repository: ${{ steps.prepare.outputs.repository }}
         ref: ${{ steps.prepare.outputs.branch }}
@@ -72,32 +49,14 @@ runs:
         persist-credentials: true
     - id: publish
       shell: bash
-      run: |
-        set -euo pipefail
-        public_root="${GITHUB_WORKSPACE}/.course-courier-public"
-        managed_subtree="${{ steps.prepare.outputs.managed_subtree }}"
-        stage_root="${{ steps.prepare.outputs.stage }}"
-        if [ "${managed_subtree}" = "." ]; then
-          stage_boundary="${stage_root}"
-          public_boundary="${public_root}"
-        else
-          stage_boundary="${stage_root}/${managed_subtree}"
-          public_boundary="${public_root}/${managed_subtree}"
-          mkdir -p "${public_boundary}"
-        fi
-        uv run --locked --project "${GITHUB_ACTION_PATH}/.." python -m course_courier.review --stage "${stage_root}" --public "${public_root}" --managed-subtree "${managed_subtree}" > "${{ steps.prepare.outputs.review }}"
-        if [ "$(python -c "import json; print(str(json.load(open('${{ steps.prepare.outputs.review }}'))['changed']).lower())")" = "false" ]; then
-          printf 'published=false\n' >> "${GITHUB_OUTPUT}"
-          exit 0
-        fi
-        rsync -a --delete --exclude=.git "${stage_boundary}/" "${public_boundary}/"
-        git -C "${public_root}" config user.name "course-courier[bot]"
-        git -C "${public_root}" config user.email "course-courier[bot]@users.noreply.github.com"
-        git -C "${public_root}" add -A
-        git -C "${public_root}" commit -m "Publish course content from ${GITHUB_SHA} (manifest ${{ steps.prepare.outputs.manifest_sha256 }})"
-        git -C "${public_root}" push origin "HEAD:${{ steps.prepare.outputs.branch }}"
-        printf 'published=true\n' >> "${GITHUB_OUTPUT}"
-    - uses: actions/upload-artifact@v4
+      env:
+        STAGE: ${{ steps.prepare.outputs.stage }}
+        REVIEW: ${{ steps.prepare.outputs.review }}
+        MANAGED_SUBTREE: ${{ steps.prepare.outputs.managed_subtree }}
+        MANIFEST_SHA256: ${{ steps.prepare.outputs.manifest_sha256 }}
+        BRANCH: ${{ steps.prepare.outputs.branch }}
+      run: bash "${GITHUB_ACTION_PATH}/publish.sh"
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
       if: always()
       with:
         name: course-courier-publish-review

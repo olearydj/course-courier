@@ -8,7 +8,7 @@ import nbformat
 import pytest
 
 from course_courier.planner import CourierError, create_plan
-from course_courier.staging import build, verify
+from course_courier.staging import _pair_comparison_bytes, build, verify
 
 
 def write_pair(tmp_path: Path, *, synchronized: bool = True) -> tuple[Path, Path, Path]:
@@ -73,6 +73,16 @@ def test_pair_validation_ignores_jupytext_markdown_representation_metadata(tmp_p
     build(manifest, tmp_path / "staged")
 
 
+def test_pair_comparison_ignores_empty_jupytext_metadata_and_nbformat_minor() -> None:
+    markdown_notebook = nbformat.v4.new_notebook(cells=[nbformat.v4.new_markdown_cell("lesson")])
+    markdown_notebook.metadata["jupytext"] = {"text_representation": {"extension": ".md"}}
+    markdown_notebook.nbformat_minor = 5
+    private_notebook = nbformat.v4.new_notebook(cells=[nbformat.v4.new_markdown_cell("lesson")])
+    private_notebook.nbformat_minor = 6
+
+    assert _pair_comparison_bytes(markdown_notebook) == _pair_comparison_bytes(private_notebook)
+
+
 def test_build_rejects_out_of_sync_notebook_pair(tmp_path: Path) -> None:
     manifest, _, _ = write_pair(tmp_path, synchronized=False)
 
@@ -111,4 +121,41 @@ def test_planner_rejects_invalid_notebook_declarations(
     )
 
     with pytest.raises(CourierError, match=message):
+        create_plan(manifest)
+
+
+def test_planner_rejects_duplicate_notebook_declarations(tmp_path: Path) -> None:
+    manifest, _, _ = write_pair(tmp_path)
+    manifest.write_text(manifest.read_text() + '\n[[notebook]]\nnotebook = "lesson.ipynb"\nmarkdown = "lesson.md"\n')
+
+    with pytest.raises(CourierError, match="duplicates"):
+        create_plan(manifest)
+
+
+def test_build_rejects_malformed_markdown_source(tmp_path: Path) -> None:
+    manifest, _, markdown = write_pair(tmp_path)
+    markdown.write_text("---\njupyter: [unclosed\n---\n# lesson\n")
+
+    with pytest.raises(CourierError, match="cannot validate notebook pair"):
+        build(manifest, tmp_path / "staged")
+
+
+def test_build_rejects_malformed_notebook_json(tmp_path: Path) -> None:
+    manifest, notebook, _ = write_pair(tmp_path)
+    notebook.write_text("{not notebook json")
+
+    with pytest.raises(CourierError, match="cannot validate notebook pair"):
+        build(manifest, tmp_path / "staged")
+
+
+def test_notebook_markdown_transient_diagnostic_names_the_markdown_field(tmp_path: Path) -> None:
+    manifest, _, _ = write_pair(tmp_path)
+    transient = tmp_path / ".ipynb_checkpoints" / "lesson.md"
+    transient.parent.mkdir()
+    transient.write_text("transient")
+    manifest.write_text(
+        manifest.read_text().replace('markdown = "lesson.md"', 'markdown = ".ipynb_checkpoints/lesson.md"')
+    )
+
+    with pytest.raises(CourierError, match=r"notebook entry 1.markdown"):
         create_plan(manifest)

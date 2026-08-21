@@ -2,7 +2,7 @@
 
 `course-courier` is a deliberately small course-content publisher: it carries an explicit selection of student-facing material from a private teaching repository to its public GitHub repository.
 
-Sprints 1 through 6 implement the planner, safe local staging, verification, optional staged-only notebook normalization, review and publish Actions, and a protected-branch automatic synchronization workflow. Enabling a course workflow remains a maintainer decision.
+Sprints 1 through 6.5 implement the planner, safe local staging, verification, optional staged-only notebook normalization, review and publish Actions, a protected-branch automatic synchronization workflow, and hardening of manifest, file-mode, and Action-script boundaries. Enabling a course workflow remains a maintainer decision.
 
 ## Problem
 
